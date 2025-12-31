@@ -1,53 +1,77 @@
 import mongoose from 'mongoose';
 
-const VoiceSchema = new mongoose.Schema(
-  {
-    name: { 
-      type: String, 
-      required: true, 
-      trim: true,
-      minlength: 2,
-      maxlength: 100 
-    },
-    designation: { 
-      type: String, 
-      required: true, 
-      trim: true,
-      minlength: 2,
-      maxlength: 100 
-    },
-    text: { 
-      type: String, 
-      required: true,
-      minlength: 2,
-      maxlength: 2000 
-    },
-    image: { 
-      type: String, 
-      required: true 
-    },
-    imagePublicId: {
-      type: String,
-      required: true
-    }
-  },
-  { _id: false }
-);
-
 const DocumentationSchema = new mongoose.Schema(
   {
-    sections: {
-      type: Map,
-      of: VoiceSchema,
-      default: {}
-    }
+    principalVoice: {
+      photo: {
+        type: String,
+        required: true,
+      },
+      photoPublicId: {
+        type: String,
+        required: true,
+      },
+      title: {
+        type: String,
+        required: true,
+      },
+      text: {
+        type: String,
+        required: true,
+      },
+    },
+    ourMission: {
+      type: String,
+      required: true,
+    },
+    ourVision: {
+      type: String,
+      required: true,
+    },
+    onlineFeatures: [
+      {
+        type: String,
+        required: true,
+      },
+    ],
+    ourAchievement: [
+      {
+        type: String,
+        required: true,
+      },
+    ],
+    contact: {
+      helpline: [
+        {
+          type: String,
+          required: true,
+        },
+      ],
+      email: [
+        {
+          type: String,
+          required: true,
+        },
+      ],
+      headOffice: {
+        type: String,
+        required: true,
+      },
+      website: [
+        {
+          type: String,
+          required: true,
+        },
+      ],
+    },
+    socialMedia: {
+      facebook: { type: String, required: true },
+      youtube: { type: String, required: true },
+      whatsapp: { type: String, required: true },
+      telegram: { type: String, required: true },
+    },
   },
   { timestamps: true }
 );
-
-DocumentationSchema.methods.isValidSection = function(sectionName) {
-  const validSections = ['directorVoice', 'teacherVoice', 'studentVoice', 'parentVoice'];
-  return validSections.includes(sectionName);
-};
 
 export default mongoose.model('Documentation', DocumentationSchema);

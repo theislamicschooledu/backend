@@ -1,23 +1,26 @@
+import { upload } from "../middlewares/upload.js";
 import Documentation from "../models/Documentation.js";
 import cloudinary from "../utils/cloudinary.js";
 
 const isAdmin = (req) => req.user && req.user.role === "admin";
 
-const uploadImageStream = async (buffer, folder) => {
+const uploadImageStream = async (buffer, folder, fileName) => {
   return new Promise((resolve, reject) => {
     const uploadTimeout = setTimeout(() => {
-      reject(new Error('Image upload timeout'));
+      reject(new Error('Image upload timeout after 30 seconds'));
     }, 30000);
 
     const stream = cloudinary.uploader.upload_stream(
       { 
         folder: `documentation/${folder}`,
         resource_type: 'image',
-        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
         transformation: [
-          { width: 800, height: 800, crop: 'limit' },
+          { width: 1200, height: 800, crop: 'limit' },
           { quality: 'auto:good' }
-        ]
+        ],
+        public_id: fileName ? `${fileName}_${Date.now()}` : undefined,
+        overwrite: true
       },
       (error, result) => {
         clearTimeout(uploadTimeout);
@@ -38,275 +41,256 @@ const uploadImageStream = async (buffer, folder) => {
   });
 };
 
-export const createDocumentation = async (req, res) => {
+
+const deleteImage = async (publicId) => {
+  try {
+    const result = await cloudinary.uploader.destroy(publicId);
+    if (result.result !== 'ok') {
+      throw new Error(`Failed to delete image: ${result.result}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('Cloudinary delete error:', error);
+    throw error;
+  }
+};
+
+const handleCreateOrUpdate = async (req, res) => {
   try {
     if (!isAdmin(req)) {
       return res.status(403).json({ 
         success: false, 
-        error: "Access denied. Admin only." 
+        message: "Access denied. Admin only." 
       });
     }
 
-    const { sections } = req.body;
-    const files = req.files || {};
+    const {
+      principalVoiceTitle,
+      principalVoiceText,
+      ourMission,
+      ourVision,
+      onlineFeatures,
+      ourAchievement,
+      helpline,
+      email,
+      headOffice,
+      website,
+      facebook,
+      youtube,
+      whatsapp,
+      telegram
+    } = req.body;
 
-    if (!sections || typeof sections !== 'object') {
+    if (!principalVoiceTitle || !principalVoiceText) {
       return res.status(400).json({
         success: false,
-        error: "Invalid request body. 'sections' object required."
+        message: "Principal voice title and text are required"
       });
     }
 
-    const doc = new Documentation();
-    
-    for (const [sectionName, sectionData] of Object.entries(sections)) {
-      if (!doc.isValidSection(sectionName)) {
-        return res.status(400).json({
-          success: false,
-          error: `Invalid section: ${sectionName}`
-        });
-      }
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Principal voice photo is required"
+      });
+    }
 
-      if (!files[sectionName] || !files[sectionName][0]) {
-        return res.status(400).json({
-          success: false,
-          error: `Image required for ${sectionName}`
-        });
-      }
+    if (!req.file.mimetype.startsWith('image/')) {
+      return res.status(400).json({
+        success: false,
+        message: "Only image files are allowed"
+      });
+    }
 
-      const file = files[sectionName][0];
+    const existingDoc = await Documentation.findOne();
+
+    let uploadResult;
+    let oldPublicId = null;
+
+    try {
+      const fileName = `principal_voice_${Date.now()}`;
       
-      // Basic file validation
-      if (!file.mimetype.startsWith('image/')) {
-        return res.status(400).json({
-          success: false,
-          error: `Only image files allowed for ${sectionName}`
-        });
+      if (existingDoc && existingDoc.principalVoice.photoPublicId) {
+        oldPublicId = existingDoc.principalVoice.photoPublicId;
+      }
+      
+      uploadResult = await uploadImageStream(
+        req.file.buffer, 
+        'principal-voice',
+        fileName
+      );
+    } catch (uploadError) {
+      console.error('Image upload error:', uploadError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to upload image to Cloudinary'
+      });
+    }
+
+    const parseArrayField = (field) => {
+      if (!field) return [];
+      if (Array.isArray(field)) return field;
+      if (typeof field === 'string') {
+        try {
+          const parsed = JSON.parse(field);
+          return Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          return field.split(',').map(item => item.trim()).filter(item => item);
+        }
+      }
+      return [];
+    };
+
+    const documentationData = {
+      principalVoice: {
+        photo: uploadResult.secure_url,
+        photoPublicId: uploadResult.public_id,
+        title: principalVoiceTitle,
+        text: principalVoiceText
+      },
+      ourMission: ourMission || '',
+      ourVision: ourVision || '',
+      onlineFeatures: parseArrayField(onlineFeatures),
+      ourAchievement: parseArrayField(ourAchievement),
+      contact: {
+        helpline: parseArrayField(helpline),
+        email: parseArrayField(email),
+        headOffice: headOffice || '',
+        website: parseArrayField(website)
+      },
+      socialMedia: {
+        facebook: facebook || '',
+        youtube: youtube || '',
+        whatsapp: whatsapp || '',
+        telegram: telegram || ''
+      }
+    };
+
+    if (existingDoc) {
+      if (oldPublicId && oldPublicId !== uploadResult.public_id) {
+        try {
+          await deleteImage(oldPublicId);
+          console.log('Old image deleted from Cloudinary:', oldPublicId);
+        } catch (deleteError) {
+          console.error('Failed to delete old image from Cloudinary:', deleteError);
+        }
       }
 
-      if (file.size > 5 * 1024 * 1024) { // 5MB limit
-        return res.status(400).json({
-          success: false,
-          error: `Image size too large for ${sectionName}. Max 5MB allowed.`
-        });
-      }
-
-      const uploadResult = await uploadImageStream(
-        file.buffer, 
-        sectionName
+      const updatedDoc = await Documentation.findOneAndUpdate(
+        {},
+        { $set: documentationData },
+        { 
+          new: true, 
+          runValidators: true,
+          upsert: false
+        }
       );
 
-      doc.sections.set(sectionName, {
-        ...sectionData,
-        image: uploadResult.secure_url,
-        imagePublicId: uploadResult.public_id
+      return res.status(200).json({
+        success: true,
+        message: 'Documentation updated successfully',
+        data: updatedDoc,
+      });
+    } else {
+      const newDoc = await Documentation.create(documentationData);
+
+      return res.status(201).json({
+        success: true,
+        message: 'Documentation created successfully',
+        data: newDoc,
       });
     }
 
-    await doc.save();
-
-    res.status(201).json({ 
-      success: true, 
-      message: "Documentation created successfully",
-      data: doc 
-    });
   } catch (error) {
-    console.error("Create Documentation Error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "Internal server error" 
+    console.error('Error in create/update documentation:', error);
+    
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: messages
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
 export const getDocumentation = async (req, res) => {
   try {
-    const docs = await Documentation.find({});
-    
-    res.json({ 
-      success: true, 
-      count: docs.length,
-      data: docs 
+    const documentation = await Documentation.findOne();
+
+    if (!documentation) {
+      return res.status(404).json({
+        success: false,
+        message: 'No documentation found',
+        data: null
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: documentation,
     });
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "Internal server error" 
+    console.error('Error in getDocumentation:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
-export const updateDocumentation = async (req, res) => {
+export const createOrUpdateDocumentation = [
+  upload.single('principalVoicePhoto'),
+  handleCreateOrUpdate
+];
+
+export const deleteDocumentation = async (req, res) => {
   try {
     if (!isAdmin(req)) {
       return res.status(403).json({ 
         success: false, 
-        error: "Access denied. Admin only." 
+        message: "Access denied. Admin only." 
       });
     }
 
-    const { docId } = req.params;
-    const { sections } = req.body;
-    const files = req.files || {};
+    const documentation = await Documentation.findOne();
 
-    if (!docId) {
-      return res.status(400).json({
+    if (!documentation) {
+      return res.status(404).json({
         success: false,
-        error: "Documentation ID required"
+        message: 'Documentation not found',
       });
     }
 
-    const doc = await Documentation.findById(docId);
-    if (!doc) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Documentation not found" 
-      });
-    }
-
-    for (const [sectionName, sectionData] of Object.entries(sections || {})) {
-      if (!doc.isValidSection(sectionName)) {
-        return res.status(400).json({
-          success: false,
-          error: `Invalid section: ${sectionName}`
-        });
-      }
-
-      const existingSection = doc.sections.get(sectionName);
-      const updatedSection = { ...existingSection?.toObject(), ...sectionData };
-
-      // Handle image upload if new file provided
-      if (files[sectionName] && files[sectionName][0]) {
-        const file = files[sectionName][0];
-        
-        // File validation
-        if (!file.mimetype.startsWith('image/')) {
-          return res.status(400).json({
-            success: false,
-            error: `Only image files allowed for ${sectionName}`
-          });
-        }
-
-        // Delete old image if exists
-        if (existingSection?.imagePublicId) {
-          try {
-            await cloudinary.uploader.destroy(existingSection.imagePublicId);
-          } catch (cloudinaryError) {
-            console.error(`Failed to delete old image for ${sectionName}:`, cloudinaryError);
-            // Continue with upload despite delete error
-          }
-        }
-
-        const uploadResult = await uploadImageStream(
-          file.buffer, 
-          sectionName
-        );
-
-        updatedSection.image = uploadResult.secure_url;
-        updatedSection.imagePublicId = uploadResult.public_id;
-      }
-
-      doc.sections.set(sectionName, updatedSection);
-    }
-
-    await doc.save();
-
-    res.json({ 
-      success: true, 
-      message: "Documentation updated successfully",
-      data: doc 
-    });
-  } catch (error) {
-    console.error("Update Documentation Error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "Internal server error" 
-    });
-  }
-};
-
-export const deleteSection = async (req, res) => {
-  try {
-    if (!isAdmin(req)) {
-      return res.status(403).json({ 
-        success: false, 
-        error: "Access denied. Admin only." 
-      });
-    }
-
-    const { docId, sectionName } = req.params;
-
-    if (!docId || !sectionName) {
-      return res.status(400).json({
-        success: false,
-        error: "Documentation ID and section name required"
-      });
-    }
-
-    const doc = await Documentation.findById(docId);
-    if (!doc) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Documentation not found" 
-      });
-    }
-
-    if (!doc.sections.has(sectionName)) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Section not found" 
-      });
-    }
-
-    const section = doc.sections.get(sectionName);
-    
-    // Delete image from Cloudinary
-    if (section.imagePublicId) {
+    if (documentation.principalVoice.photoPublicId) {
       try {
-        await cloudinary.uploader.destroy(section.imagePublicId);
-      } catch (cloudinaryError) {
-        console.error(`Failed to delete image from Cloudinary:`, cloudinaryError);
-        // Continue with deletion despite Cloudinary error
+        await deleteImage(documentation.principalVoice.photoPublicId);
+        console.log('Image deleted from Cloudinary:', documentation.principalVoice.photoPublicId);
+      } catch (deleteError) {
+        console.error('Failed to delete image from Cloudinary:', deleteError);
       }
     }
 
-    // Remove section from map
-    doc.sections.delete(sectionName);
-    await doc.save();
+    await Documentation.deleteOne({ _id: documentation._id });
 
-    res.json({ 
-      success: true, 
-      message: `${sectionName} section deleted successfully` 
+    return res.status(200).json({
+      success: true,
+      message: 'Documentation deleted successfully',
     });
   } catch (error) {
-    console.error("Delete Section Error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "Internal server error" 
-    });
-  }
-};
-
-export const getDocumentationById = async (req, res) => {
-  try {
-    const { docId } = req.params;
-    
-    const doc = await Documentation.findById(docId);
-    if (!doc) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Documentation not found" 
-      });
-    }
-
-    res.json({ 
-      success: true, 
-      data: doc 
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "Internal server error" 
+    console.error('Error in deleteDocumentation:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
