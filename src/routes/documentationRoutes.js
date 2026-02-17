@@ -8,7 +8,7 @@ import {
 
 const documentationRouter = express.Router();
 
-documentationRouter.get('/', protect, adminOnly, getDocumentation);
+documentationRouter.get('/', getDocumentation);
 
 documentationRouter.post('/', protect, adminOnly, createOrUpdateDocumentation);
 

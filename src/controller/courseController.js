@@ -7,6 +7,102 @@ import CourseCategory from '../models/CourseCategory.js';
 import cloudinary from '../utils/cloudinary.js';
 import User from '../models/User.js';
 
+// Constants for consistent status values
+const COURSE_STATUS = {
+  COMING_SOON: 'coming_soon',
+  UPCOMING: 'upcoming',
+  ENROLLMENT_OPEN: 'enrollment_open',
+  ENROLLMENT_CLOSED: 'enrollment_closed',
+  COURSE_STARTED: 'course_started',
+  PUBLISHED: 'published',
+  PENDING: 'pending'
+};
+
+// Helper function to determine course status based on dates
+const getCourseStatus = (course) => {
+  const now = new Date();
+  
+  // If isUpcoming is true, it's always "coming soon"
+  if (course.isUpcoming === true) {
+    return COURSE_STATUS.COMING_SOON;
+  }
+  
+  // If any of the dates is missing, it's "coming soon"
+  if (!course.enrollmentStart || !course.enrollmentEnd || !course.courseStart) {
+    return COURSE_STATUS.COMING_SOON;
+  }
+  
+  // If enrollment hasn't started yet
+  if (now < course.enrollmentStart) {
+    return COURSE_STATUS.UPCOMING;
+  }
+  
+  // If enrollment is open
+  if (now >= course.enrollmentStart && now <= course.enrollmentEnd) {
+    return COURSE_STATUS.ENROLLMENT_OPEN;
+  }
+  
+  // If enrollment closed but course hasn't started
+  if (now > course.enrollmentEnd && now < course.courseStart) {
+    return COURSE_STATUS.ENROLLMENT_CLOSED;
+  }
+  
+  // If course has started
+  if (now >= course.courseStart) {
+    return COURSE_STATUS.COURSE_STARTED;
+  }
+  
+  return COURSE_STATUS.PUBLISHED; // fallback
+};
+
+// Format course response with additional status info
+const formatCourseResponse = (course) => {
+  if (!course) return null;
+  
+  const courseObj = course.toObject ? course.toObject() : course;
+  const currentStatus = getCourseStatus(course);
+  
+  return {
+    ...courseObj,
+    currentStatus,
+    isComingSoon: currentStatus === COURSE_STATUS.COMING_SOON
+  };
+};
+
+// Helper function to handle errors consistently
+const handleError = (res, error, customMessage = 'Internal server error') => {
+  console.error(`Error: ${customMessage}`, error);
+
+  if (error.name === 'CastError') {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid ID format'
+    });
+  }
+
+  if (error.name === 'ValidationError') {
+    const errors = Object.values(error.errors).map(err => err.message);
+    return res.status(400).json({
+      success: false,
+      message: 'Validation error',
+      errors
+    });
+  }
+
+  if (error.code === 11000) {
+    return res.status(400).json({
+      success: false,
+      message: 'Duplicate key error. A record with this value already exists.'
+    });
+  }
+
+  res.status(500).json({
+    success: false,
+    message: customMessage,
+    ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+  });
+};
+
 // ------------------- Course -------------------
 
 export const createCourse = async (req, res) => {
@@ -24,70 +120,39 @@ export const createCourse = async (req, res) => {
       status,
       featured,
       features,
+      isUpcoming,
     } = req.body;
 
-    // Validation for required fields
-    if (
-      !title ||
-      !price ||
-      !description ||
-      !category ||
-      !enrollmentStart ||
-      !enrollmentEnd ||
-      !duration ||
-      !courseStart
-    ) {
+    // Basic required fields
+    if (!title || !price || !description || !category || !duration) {
       return res.status(400).json({
         success: false,
-        message:
-          'Title, price, description, category, enrollment dates, and duration are required fields',
+        message: 'Title, price, description, category, and duration are required fields',
       });
     }
 
-    // Validate and parse features array - FIXED VERSION
+    // Parse features
     let featuresArray = [];
     if (features) {
-      // Case 1: Already an array
       if (Array.isArray(features)) {
         featuresArray = features;
-      }
-      // Case 2: String that might be JSON
-      else if (typeof features === 'string') {
+      } else if (typeof features === 'string') {
         try {
-          // Try to parse as JSON first
           const parsed = JSON.parse(features);
-          if (Array.isArray(parsed)) {
-            featuresArray = parsed;
-          } else {
-            // If it's a string of comma-separated values
-            featuresArray = features
-              .split(',')
-              .map((feature) => feature.trim())
-              .filter(Boolean);
-          }
+          featuresArray = Array.isArray(parsed) ? parsed : [];
         } catch (error) {
-          // If JSON parsing fails, treat as comma-separated string
           featuresArray = features
             .split(',')
             .map((feature) => feature.trim())
             .filter(Boolean);
         }
       }
-      // Case 3: Invalid type - set to empty array
-      else {
-        featuresArray = [];
-      }
-
-      // Ensure featuresArray is actually an array before using array methods
+      
       if (!Array.isArray(featuresArray)) {
         featuresArray = [];
       }
 
-      // Validate each feature is not empty (only if we have features)
-      if (
-        featuresArray.length > 0 &&
-        featuresArray.some((feature) => !feature.trim())
-      ) {
+      if (featuresArray.some((feature) => !feature?.trim())) {
         return res.status(400).json({
           success: false,
           message: 'Features cannot contain empty values',
@@ -95,15 +160,57 @@ export const createCourse = async (req, res) => {
       }
     }
 
-    // Validate enrollment dates
-    if (new Date(enrollmentStart) >= new Date(enrollmentEnd)) {
+    // Validate dates
+    let finalEnrollmentStart = null;
+    let finalEnrollmentEnd = null;
+    let finalCourseStart = null;
+    let finalStatus = status || COURSE_STATUS.PENDING;
+    let finalIsUpcoming = isUpcoming === true || isUpcoming === 'true';
+
+    if (finalIsUpcoming) {
+      // For upcoming courses, dates are optional
+      finalEnrollmentStart = enrollmentStart ? new Date(enrollmentStart) : null;
+      finalEnrollmentEnd = enrollmentEnd ? new Date(enrollmentEnd) : null;
+      finalCourseStart = courseStart ? new Date(courseStart) : null;
+    } 
+    else if (enrollmentStart && enrollmentEnd && courseStart) {
+      // All dates provided - validate them
+      finalEnrollmentStart = new Date(enrollmentStart);
+      finalEnrollmentEnd = new Date(enrollmentEnd);
+      finalCourseStart = new Date(courseStart);
+
+      // Check if dates are valid
+      if (isNaN(finalEnrollmentStart.getTime()) || 
+          isNaN(finalEnrollmentEnd.getTime()) || 
+          isNaN(finalCourseStart.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid date format',
+        });
+      }
+
+      if (finalEnrollmentStart > finalEnrollmentEnd) {
+        return res.status(400).json({
+          success: false,
+          message: 'Enrollment end date must be after or equal to start date',
+        });
+      }
+
+      if (finalEnrollmentEnd > finalCourseStart) {
+        return res.status(400).json({
+          success: false,
+          message: 'Course must start on or after enrollment ends',
+        });
+      }
+      
+      finalIsUpcoming = false;
+    } else {
       return res.status(400).json({
         success: false,
-        message: 'Enrollment end date must be after start date',
+        message: 'Regular courses require all dates (enrollmentStart, enrollmentEnd, courseStart)',
       });
     }
 
-    // Validate duration
     if (duration <= 0) {
       return res.status(400).json({
         success: false,
@@ -111,30 +218,27 @@ export const createCourse = async (req, res) => {
       });
     }
 
-    // Validate teachers array
+    // Validate teachers
     let teachersArray = [];
     if (teachers) {
-      if (Array.isArray(teachers)) {
-        teachersArray = teachers;
-      } else {
-        teachersArray = [teachers];
-      }
+      teachersArray = Array.isArray(teachers) ? teachers : [teachers].filter(Boolean);
+      
+      if (teachersArray.length > 0) {
+        const existingTeachers = await User.find({
+          _id: { $in: teachersArray },
+          role: { $in: ['teacher', 'admin'] },
+        }).select('_id');
 
-      // Validate if teachers exist in database
-      const existingTeachers = await User.find({
-        _id: { $in: teachersArray },
-        role: { $in: ['teacher', 'admin'] },
-      });
-
-      if (existingTeachers.length !== teachersArray.length) {
-        return res.status(400).json({
-          success: false,
-          message: 'One or more selected teachers do not exist',
-        });
+        if (existingTeachers.length !== teachersArray.length) {
+          return res.status(400).json({
+            success: false,
+            message: 'One or more selected teachers do not exist or are not teachers',
+          });
+        }
       }
     }
 
-    // Validate category exists
+    // Validate category
     const existingCategory = await CourseCategory.findById(category);
     if (!existingCategory) {
       return res.status(400).json({
@@ -143,13 +247,12 @@ export const createCourse = async (req, res) => {
       });
     }
 
+    // Handle thumbnail upload
     let thumbnailUrl = null;
     let thumbnailPublicId = null;
 
-    // Handle thumbnail upload
     if (req.file) {
-      // Validate file type
-      const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
+      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
       if (!allowedMimeTypes.includes(req.file.mimetype)) {
         return res.status(400).json({
           success: false,
@@ -157,7 +260,6 @@ export const createCourse = async (req, res) => {
         });
       }
 
-      // Validate file size (5MB)
       if (req.file.size > 5 * 1024 * 1024) {
         return res.status(400).json({
           success: false,
@@ -194,19 +296,20 @@ export const createCourse = async (req, res) => {
       }
     }
 
-    // Create new course
+    // Create course
     const newCourse = await Course.create({
       title: title.trim(),
       price: parseFloat(price),
-      description: description,
-      category: category,
+      description: description.trim(),
+      category,
       features: featuresArray,
       teachers: teachersArray,
-      enrollmentStart: new Date(enrollmentStart),
-      enrollmentEnd: new Date(enrollmentEnd),
-      courseStart: new Date(courseStart),
+      enrollmentStart: finalEnrollmentStart,
+      enrollmentEnd: finalEnrollmentEnd,
+      courseStart: finalCourseStart,
       duration: parseInt(duration),
-      status: status || 'pending',
+      status: finalStatus,
+      isUpcoming: finalIsUpcoming,
       featured: featured === 'true' || featured === true,
       thumbnail: thumbnailUrl,
       thumbnailPublicId: thumbnailPublicId,
@@ -217,153 +320,170 @@ export const createCourse = async (req, res) => {
       coupons: [],
     });
 
-    // Populate the response with category and teachers details
     const populatedCourse = await Course.findById(newCourse._id)
       .populate('category', 'name')
       .populate('teachers', 'name email')
       .select('-thumbnailPublicId');
 
+    const formattedCourse = formatCourseResponse(populatedCourse);
+
     res.status(201).json({
       success: true,
       message: 'Course created successfully',
-      course: populatedCourse,
+      data: formattedCourse,
     });
   } catch (error) {
-    console.error('Course creation error:', error);
-
-    // Handle duplicate key errors
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: 'A course with this title already exists',
-      });
-    }
-
-    // Handle validation errors
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map((err) => err.message);
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: errors,
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
+    handleError(res, error, 'Course creation failed');
   }
-}; // Done
+};
 
 export const addCourseCategory = async (req, res) => {
   try {
     const { name } = req.body;
 
-    if (!name) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Name is required' });
+    if (!name?.trim()) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Category name is required' 
+      });
     }
 
-    const existing = await CourseCategory.findOne({ name });
+    const existing = await CourseCategory.findOne({ name: name.trim() });
     if (existing) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Category already exists' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Category already exists' 
+      });
     }
 
-    const category = await CourseCategory.create({ name });
-    res
-      .status(201)
-      .json({ success: true, message: 'New Category added', category });
+    const category = await CourseCategory.create({ name: name.trim() });
+    
+    res.status(201).json({ 
+      success: true, 
+      message: 'Category added successfully',
+      data: category 
+    });
   } catch (error) {
-    console.error('Error creating category:', error);
-    res
-      .status(500)
-      .json({ success: false, message: 'Failed to create category' });
+    handleError(res, error, 'Failed to create category');
   }
-}; // Done
+};
 
 export const getCourseCategory = async (req, res) => {
   try {
     const categories = await CourseCategory.find().sort({ name: 1 });
 
-    if (categories.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'No categories found' });
-    }
-
-    res.status(200).json({ success: true, categories });
+    res.status(200).json({ 
+      success: true, 
+      count: categories.length,
+      data: categories 
+    });
   } catch (error) {
-    console.error(error);
-    res
-      .status(500)
-      .json({ success: false, message: 'Failed to get categories' });
+    handleError(res, error, 'Failed to get categories');
   }
-}; // Done
+};
 
 export const getPublishCourses = async (req, res) => {
   try {
-    const publishCourse = await Course.find({
-      status: 'published',
-    })
+    const { status, upcoming } = req.query;
+    const now = new Date();
+    
+    let query = { status: 'published' };
+    
+    // Filter by upcoming
+    if (upcoming === 'true') {
+      query.isUpcoming = true;
+    } else if (upcoming === 'false') {
+      query.isUpcoming = false;
+    }
+    
+    // Filter by dynamic status
+    if (status) {
+      switch (status) {
+        case COURSE_STATUS.ENROLLMENT_OPEN:
+          query = {
+            ...query,
+            isUpcoming: false,
+            enrollmentStart: { $lte: now, $ne: null },
+            enrollmentEnd: { $gte: now, $ne: null },
+            courseStart: { $ne: null }
+          };
+          break;
+        case COURSE_STATUS.UPCOMING:
+          query = {
+            ...query,
+            isUpcoming: false,
+            enrollmentStart: { $gt: now, $ne: null },
+            enrollmentEnd: { $ne: null },
+            courseStart: { $ne: null }
+          };
+          break;
+        case COURSE_STATUS.ENROLLMENT_CLOSED:
+          query = {
+            ...query,
+            isUpcoming: false,
+            enrollmentEnd: { $lt: now, $ne: null },
+            courseStart: { $gt: now, $ne: null }
+          };
+          break;
+        case COURSE_STATUS.COURSE_STARTED:
+          query = {
+            ...query,
+            isUpcoming: false,
+            courseStart: { $lte: now, $ne: null }
+          };
+          break;
+        case COURSE_STATUS.COMING_SOON:
+          query = {
+            ...query,
+            isUpcoming: true
+          };
+          break;
+      }
+    }
+    
+    const publishCourse = await Course.find(query)
       .sort({ createdAt: -1 })
       .populate('category', 'name')
       .populate('teachers', 'name role avatar')
       .select(
-        'title thumbnail price category description duration enrollmentEnd courseStart averageRating lectures teachers'
+        'title thumbnail price category description duration enrollmentStart enrollmentEnd courseStart averageRating lectures teachers status featured isUpcoming'
       );
 
-    if (!publishCourse) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'No course found' });
-    }
+    // Format each course with status info
+    const formattedCourses = publishCourse.map(course => formatCourseResponse(course));
 
     res.status(200).json({
       success: true,
-      courses: publishCourse,
+      count: formattedCourses.length,
+      data: formattedCourses,
     });
   } catch (error) {
-    console.error('Error fetching published course:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch published course',
-    });
+    handleError(res, error, 'Failed to fetch published courses');
   }
-}; // Done
+};
 
 export const getFeaturedCourses = async (req, res) => {
   try {
-    const featuredCourse = await Course.find({
+    const featuredCourses = await Course.find({
       featured: true,
+      status: 'published'
     })
       .sort({ createdAt: -1 })
       .populate('category', 'name')
       .populate('teachers', 'name role avatar')
       .select(
-        'title thumbnail price category description duration enrollmentEnd courseStart averageRating lectures teachers ratingCount'
+        'title thumbnail price category description duration enrollmentStart enrollmentEnd courseStart averageRating lectures teachers ratingCount status isUpcoming'
       );
 
-    if (!featuredCourse) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'No course found' });
-    }
+    const formattedCourses = featuredCourses.map(course => formatCourseResponse(course));
 
     res.status(200).json({
       success: true,
-      courses: featuredCourse,
+      count: formattedCourses.length,
+      data: formattedCourses,
     });
   } catch (error) {
-    console.error('Error fetching featured course:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch featured course',
-    });
+    handleError(res, error, 'Failed to fetch featured courses');
   }
 };
 
@@ -371,50 +491,82 @@ export const getCourseDetails = async (req, res) => {
   try {
     const { id } = req.params;
     const course = await Course.findById(id)
-      .sort({ createdAt: -1 })
       .populate('category', 'name')
-      .populate('lectures', 'title')
+      .populate('lectures', 'title duration')
       .populate('teachers', 'name role bio avatar')
+      .populate({
+        path: 'reviews',
+        populate: { path: 'user', select: 'name avatar' }
+      })
       .select(
-        'averageRating category courseStart description duration enrollmentEnd enrollmentStart featured features lectures price ratingCount status studentCount teachers thumbnail title'
+        'averageRating category courseStart description duration enrollmentEnd enrollmentStart featured features lectures price ratingCount status studentCount teachers thumbnail title isUpcoming'
       );
 
     if (!course) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'No course found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Course not found' 
+      });
     }
+
+    const formattedCourse = formatCourseResponse(course);
 
     res.status(200).json({
       success: true,
-      course,
+      data: formattedCourse,
     });
   } catch (error) {
-    console.error('Error fetching published course:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch published course',
-    });
+    handleError(res, error, 'Failed to fetch course details');
   }
 };
 
 export const getCourses = async (req, res) => {
   try {
-    const courses = await Course.find()
+    const { status, featured, upcoming } = req.query;
+    
+    let query = {};
+    
+    // Filter by status
+    if (status) {
+      query.status = status;
+    }
+    
+    // Filter by featured
+    if (featured === 'true') {
+      query.featured = true;
+    }
+    
+    // Filter by upcoming
+    if (upcoming === 'true') {
+      query.isUpcoming = true;
+    } else if (upcoming === 'false') {
+      query.isUpcoming = false;
+    }
+    
+    const courses = await Course.find(query)
       .populate('teachers', 'name email role')
       .populate('category', 'name')
       .select(
-        'title thumbnail price category description features teachers enrollmentStart enrollmentEnd courseStart duration averageRating ratingCount lectures status featured createdAt studentCount'
+        'title thumbnail price category description features teachers enrollmentStart enrollmentEnd courseStart duration averageRating ratingCount lectures status featured createdAt studentCount isUpcoming'
       );
-    const modifiedCourses = courses.map((course) => ({
-      ...course.toObject(),
-      lectureCount: course.lectures.length,
-      lectures: undefined,
-    }));
+    
+    // Format courses with additional status info
+    const modifiedCourses = courses.map((course) => {
+      const formattedCourse = formatCourseResponse(course);
+      return {
+        ...formattedCourse,
+        lectureCount: course.lectures?.length || 0,
+        lectures: undefined,
+      };
+    });
 
-    res.json(modifiedCourses);
+    res.status(200).json({
+      success: true,
+      count: modifiedCourses.length,
+      data: modifiedCourses
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error, 'Failed to fetch courses');
   }
 };
 
@@ -422,28 +574,42 @@ export const getCourseById = async (req, res) => {
   try {
     const course = await Course.findById(req.params.id)
       .populate('teachers', 'name email role')
-      .populate('lectures', 'title videoUrl resources')
+      .populate('lectures', 'title videoUrl resources duration')
       .populate('category', 'name');
 
     if (!course) {
-      return res.status(404).json({ message: 'Course not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Course not found' 
+      });
     }
 
+    const formattedCourse = formatCourseResponse(course);
     const modifiedCourse = {
-      ...course._doc,
-      lectureCount: course.lectures.length,
+      ...formattedCourse,
+      lectureCount: course.lectures?.length || 0,
     };
 
-    res.json(modifiedCourse);
+    res.status(200).json({
+      success: true,
+      data: modifiedCourse
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error, 'Failed to fetch course');
   }
 };
 
 export const getCourseWithLectures = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user?.id;
     const { id } = req.params;
+
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
 
     const enrollment = await Enrollment.findOne({
       student: userId,
@@ -452,25 +618,59 @@ export const getCourseWithLectures = async (req, res) => {
     });
 
     if (!enrollment) {
-      return res
-        .status(403)
-        .json({ message: 'You must enroll in this course to access lectures' });
+      return res.status(403).json({ 
+        success: false,
+        message: 'You must enroll in this course to access lectures' 
+      });
     }
 
-    const course = await Course.findById(id).populate(
-      'lectures',
-      'title videoUrl'
-    );
+    const course = await Course.findById(id)
+      .populate('lectures', 'title videoUrl duration resources')
+      .populate('teachers', 'name email');
 
-    res.json(course);
+    if (!course) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Course not found' 
+      });
+    }
+
+    const formattedCourse = formatCourseResponse(course);
+    
+    res.status(200).json({
+      success: true,
+      data: formattedCourse
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error, 'Failed to fetch course lectures');
   }
 };
 
 export const updateCourse = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Check if user is authorized (admin or teacher of this course)
+    if (req.user.role !== 'admin') {
+      const course = await Course.findById(id).select('teachers');
+      if (!course) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Course not found' 
+        });
+      }
+      
+      const isTeacherOfCourse = course.teachers.some(
+        tId => tId.toString() === req.user._id.toString()
+      );
+      
+      if (!isTeacherOfCourse) {
+        return res.status(403).json({ 
+          success: false, 
+          message: 'You are not authorized to update this course' 
+        });
+      }
+    }
 
     const {
       title,
@@ -485,6 +685,7 @@ export const updateCourse = async (req, res) => {
       status,
       featured,
       features,
+      isUpcoming,
     } = req.body;
 
     const existingCourse = await Course.findById(id);
@@ -495,37 +696,31 @@ export const updateCourse = async (req, res) => {
       });
     }
 
-    if (!title?.trim()) {
+    // Basic validations
+    if (title && !title.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Course title is required',
+        message: 'Course title cannot be empty',
       });
     }
 
-    if (!price || isNaN(price)) {
+    if (price && isNaN(price)) {
       return res.status(400).json({
         success: false,
         message: 'Valid price is required',
       });
     }
 
-    if (!description?.trim()) {
+    if (description && !description.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Course description is required',
+        message: 'Course description cannot be empty',
       });
     }
 
-    if (!category) {
-      return res.status(400).json({
-        success: false,
-        message: 'Category is required',
-      });
-    }
-
-    // Validate features array
-    let featuresArray = [];
-    if (features) {
+    // Parse features if provided
+    let featuresArray = existingCourse.features;
+    if (features !== undefined) {
       if (Array.isArray(features)) {
         featuresArray = features;
       } else if (typeof features === 'string') {
@@ -539,8 +734,7 @@ export const updateCourse = async (req, res) => {
         }
       }
 
-      // Validate each feature is not empty
-      if (featuresArray.some((feature) => !feature.trim())) {
+      if (featuresArray.some((feature) => !feature?.trim())) {
         return res.status(400).json({
           success: false,
           message: 'Features cannot contain empty values',
@@ -548,57 +742,60 @@ export const updateCourse = async (req, res) => {
       }
     }
 
-    if (!enrollmentStart || !enrollmentEnd) {
-      return res.status(400).json({
-        success: false,
-        message: 'Enrollment start and end dates are required',
-      });
+    // Handle dates
+    let finalEnrollmentStart = existingCourse.enrollmentStart;
+    let finalEnrollmentEnd = existingCourse.enrollmentEnd;
+    let finalCourseStart = existingCourse.courseStart;
+    let finalStatus = status || existingCourse.status;
+    let finalIsUpcoming = isUpcoming !== undefined ? 
+                         (isUpcoming === true || isUpcoming === 'true') : 
+                         existingCourse.isUpcoming;
+
+    const isUpdatingDates = enrollmentStart !== undefined || 
+                           enrollmentEnd !== undefined || 
+                           courseStart !== undefined;
+
+    if (isUpdatingDates) {
+      finalEnrollmentStart = enrollmentStart ? new Date(enrollmentStart) : existingCourse.enrollmentStart;
+      finalEnrollmentEnd = enrollmentEnd ? new Date(enrollmentEnd) : existingCourse.enrollmentEnd;
+      finalCourseStart = courseStart ? new Date(courseStart) : existingCourse.courseStart;
+
+      // Validate dates if all are provided
+      if (finalEnrollmentStart && finalEnrollmentEnd && finalCourseStart) {
+        if (finalEnrollmentStart > finalEnrollmentEnd) {
+          return res.status(400).json({
+            success: false,
+            message: 'Enrollment end date must be after or equal to start date',
+          });
+        }
+
+        if (finalEnrollmentEnd > finalCourseStart) {
+          return res.status(400).json({
+            success: false,
+            message: 'Course must start on or after enrollment ends',
+          });
+        }
+      }
     }
 
-    const startDate = new Date(enrollmentStart);
-    const endDate = new Date(enrollmentEnd);
-
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid date format',
-      });
-    }
-
-    if (startDate >= endDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'Enrollment end date must be after start date',
-      });
-    }
-
-    if (!duration || isNaN(duration) || parseInt(duration) <= 0) {
+    // Validate duration
+    if (duration && (isNaN(duration) || parseInt(duration) <= 0)) {
       return res.status(400).json({
         success: false,
         message: 'Valid duration is required (positive number)',
       });
     }
 
-    let teachersArray = [];
-    if (teachers) {
-      try {
-        if (typeof teachers === 'string') {
-          teachersArray = JSON.parse(teachers);
-        } else if (Array.isArray(teachers)) {
-          teachersArray = teachers;
-        } else {
-          teachersArray = [teachers];
-        }
-      } catch (error) {
-        teachersArray = Array.isArray(teachers) ? teachers : [teachers];
-      }
-
-      teachersArray = [...new Set(teachersArray.filter(Boolean))];
+    // Handle teachers
+    let teachersArray = existingCourse.teachers;
+    if (teachers !== undefined) {
+      teachersArray = Array.isArray(teachers) ? teachers : [teachers].filter(Boolean);
+      teachersArray = [...new Set(teachersArray)];
 
       if (teachersArray.length > 0) {
         const existingTeachers = await User.find({
           _id: { $in: teachersArray },
-        });
+        }).select('_id');
 
         if (existingTeachers.length !== teachersArray.length) {
           return res.status(400).json({
@@ -609,19 +806,23 @@ export const updateCourse = async (req, res) => {
       }
     }
 
-    const existingCategory = await CourseCategory.findById(category);
-    if (!existingCategory) {
-      return res.status(400).json({
-        success: false,
-        message: 'Selected category does not exist',
-      });
+    // Validate category if provided
+    if (category) {
+      const existingCategory = await CourseCategory.findById(category);
+      if (!existingCategory) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected category does not exist',
+        });
+      }
     }
 
+    // Handle thumbnail
     let thumbnailUrl = existingCourse.thumbnail;
     let thumbnailPublicId = existingCourse.thumbnailPublicId;
 
     if (req.file) {
-      const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
+      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
       if (!allowedMimeTypes.includes(req.file.mimetype)) {
         return res.status(400).json({
           success: false,
@@ -637,6 +838,7 @@ export const updateCourse = async (req, res) => {
       }
 
       try {
+        // Delete old thumbnail if exists
         if (thumbnailPublicId) {
           await cloudinary.uploader.destroy(thumbnailPublicId);
         }
@@ -662,7 +864,6 @@ export const updateCourse = async (req, res) => {
         thumbnailUrl = uploadResult.secure_url;
         thumbnailPublicId = uploadResult.public_id;
       } catch (uploadError) {
-        console.error('Cloudinary upload error:', uploadError);
         return res.status(500).json({
           success: false,
           message: 'Error uploading thumbnail image',
@@ -670,18 +871,20 @@ export const updateCourse = async (req, res) => {
       }
     }
 
+    // Prepare update data
     const updateData = {
-      title: title.trim(),
-      price: parseFloat(price),
-      description: description,
-      category: category,
-      features: featuresArray,
-      teachers: teachersArray,
-      enrollmentStart: new Date(enrollmentStart),
-      enrollmentEnd: new Date(enrollmentEnd),
-      courseStart: new Date(courseStart),
-      duration: parseInt(duration),
-      status: status || 'pending',
+      ...(title && { title: title.trim() }),
+      ...(price && { price: parseFloat(price) }),
+      ...(description && { description: description.trim() }),
+      ...(category && { category }),
+      ...(features !== undefined && { features: featuresArray }),
+      ...(teachers !== undefined && { teachers: teachersArray }),
+      enrollmentStart: finalEnrollmentStart,
+      enrollmentEnd: finalEnrollmentEnd,
+      courseStart: finalCourseStart,
+      ...(duration && { duration: parseInt(duration) }),
+      status: finalStatus,
+      isUpcoming: finalIsUpcoming,
       featured: featured === 'true' || featured === true || featured === '1',
       thumbnail: thumbnailUrl,
       thumbnailPublicId: thumbnailPublicId,
@@ -697,81 +900,121 @@ export const updateCourse = async (req, res) => {
       .populate('teachers', 'name email')
       .select('-thumbnailPublicId');
 
+    const formattedCourse = formatCourseResponse(populatedCourse);
+
     res.status(200).json({
       success: true,
       message: 'Course updated successfully',
-      course: populatedCourse,
+      data: formattedCourse,
     });
   } catch (error) {
-    console.error('Course update error:', error);
-
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: 'A course with this title already exists',
-      });
-    }
-
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map((err) => err.message);
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: errors,
-      });
-    }
-
-    if (error.name === 'CastError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid course ID',
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
+    handleError(res, error, 'Course update failed');
   }
-}; // Done
+};
 
 export const deleteCourseCategory = async (req, res) => {
   try {
-    const { id } = req.params;
-    const category = await CourseCategory.findById(id);
-
-    if (!category) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Course category not found' });
-    }
-
-    if (req.user.role === 'admin') {
-      await CourseCategory.findByIdAndDelete(id);
-      return res
-        .status(200)
-        .json({ success: true, message: 'Course deleted successfully' });
-    } else {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to delete this course',
+    // Only admin can delete categories
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Only admin can delete categories' 
       });
     }
+
+    const { id } = req.params;
+    
+    // Check if category is being used by any course
+    const coursesUsingCategory = await Course.countDocuments({ category: id });
+    if (coursesUsingCategory > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cannot delete category that is being used by courses' 
+      });
+    }
+
+    const category = await CourseCategory.findByIdAndDelete(id);
+
+    if (!category) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Category not found' 
+      });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Category deleted successfully' 
+    });
   } catch (error) {
-    res.status(400).json({ success: false, error: error.message });
+    handleError(res, error, 'Failed to delete category');
   }
-}; // Done
+};
 
 export const deleteCourse = async (req, res) => {
   try {
-    const course = await Course.findByIdAndDelete(req.params.id);
-    if (!course) return res.status(404).json({ message: 'Course not found' });
-    res.json({ message: 'Course deleted' });
+    // Only admin can delete courses
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Only admin can delete courses' 
+      });
+    }
+
+    const course = await Course.findById(req.params.id);
+    if (!course) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Course not found' 
+      });
+    }
+
+    // Check if there are any enrollments
+    const enrollmentsCount = await Enrollment.countDocuments({ 
+      course: course._id, 
+      paymentStatus: 'completed' 
+    });
+    
+    if (enrollmentsCount > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cannot delete course with active enrollments' 
+      });
+    }
+
+    // Delete related lectures and their resources
+    for (const lectureId of course.lectures) {
+      const lecture = await Lecture.findById(lectureId);
+      if (lecture) {
+        // Delete lecture resources from Cloudinary
+        for (const resource of lecture.resources) {
+          if (resource.publicId) {
+            await cloudinary.uploader.destroy(resource.publicId);
+          }
+        }
+        await Lecture.findByIdAndDelete(lectureId);
+      }
+    }
+
+    // Delete related coupons
+    await Coupon.deleteMany({ _id: { $in: course.coupons } });
+
+    // Delete course thumbnail from Cloudinary
+    if (course.thumbnailPublicId) {
+      await cloudinary.uploader.destroy(course.thumbnailPublicId);
+    }
+
+    // Delete the course
+    await Course.findByIdAndDelete(req.params.id);
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Course deleted successfully' 
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error, 'Failed to delete course');
   }
-}; // Done
+};
 
 export const getTeacherCourses = async (req, res) => {
   try {
@@ -782,17 +1025,15 @@ export const getTeacherCourses = async (req, res) => {
       .populate('teachers', 'name email')
       .sort({ createdAt: -1 });
 
+    const formattedCourses = courses.map(course => formatCourseResponse(course));
+
     res.status(200).json({
       success: true,
-      count: courses.length,
-      data: courses,
+      count: formattedCourses.length,
+      data: formattedCourses,
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      success: false,
-      message: 'Server Error',
-    });
+    handleError(res, error, 'Failed to fetch teacher courses');
   }
 };
 
@@ -800,25 +1041,107 @@ export const getTeacherCourseDetails = async (req, res) => {
   try {
     const course = await Course.findById(req.params.id)
       .populate('teachers', 'name email role')
-      .populate('lectures', 'title videoUrl resources')
+      .populate('lectures', 'title videoUrl resources duration')
       .populate('category', 'name');
 
     if (!course) {
-      return res.status(404).json({ message: 'Course not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'Course not found' 
+      });
     }
 
+    // Check if teacher has access to this course
+    const isTeacherOfCourse = course.teachers.some(
+      tId => tId._id.toString() === req.user._id.toString()
+    );
+
+    if (req.user.role !== 'admin' && !isTeacherOfCourse) {
+      return res.status(403).json({ 
+        success: false,
+        message: 'You do not have access to this course' 
+      });
+    }
+
+    const formattedCourse = formatCourseResponse(course);
     const modifiedCourse = {
-      ...course._doc,
-      lectureCount: course.lectures.length,
+      ...formattedCourse,
+      lectureCount: course.lectures?.length || 0,
     };
 
-    res.json(modifiedCourse);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      success: false,
-      message: 'Server Error',
+    res.status(200).json({
+      success: true,
+      data: modifiedCourse
     });
+  } catch (error) {
+    handleError(res, error, 'Failed to fetch course details');
+  }
+};
+
+export const getCoursesByStatus = async (req, res) => {
+  try {
+    const { status } = req.query;
+    const now = new Date();
+    
+    let query = { status: 'published' };
+    
+    switch (status) {
+      case COURSE_STATUS.COMING_SOON:
+        query.isUpcoming = true;
+        break;
+        
+      case COURSE_STATUS.ENROLLMENT_OPEN:
+        query = {
+          ...query,
+          isUpcoming: false,
+          enrollmentStart: { $lte: now, $ne: null },
+          enrollmentEnd: { $gte: now, $ne: null },
+          courseStart: { $ne: null }
+        };
+        break;
+        
+      case COURSE_STATUS.UPCOMING:
+        query = {
+          ...query,
+          isUpcoming: false,
+          enrollmentStart: { $gt: now, $ne: null },
+          enrollmentEnd: { $ne: null },
+          courseStart: { $ne: null }
+        };
+        break;
+        
+      case COURSE_STATUS.ENROLLMENT_CLOSED:
+        query = {
+          ...query,
+          isUpcoming: false,
+          enrollmentEnd: { $lt: now, $ne: null },
+          courseStart: { $gt: now, $ne: null }
+        };
+        break;
+        
+      case COURSE_STATUS.COURSE_STARTED:
+        query = {
+          ...query,
+          isUpcoming: false,
+          courseStart: { $lte: now, $ne: null }
+        };
+        break;
+    }
+    
+    const courses = await Course.find(query)
+      .populate('category', 'name')
+      .populate('teachers', 'name role avatar')
+      .sort({ createdAt: -1 });
+
+    const formattedCourses = courses.map(course => formatCourseResponse(course));
+
+    res.status(200).json({
+      success: true,
+      count: formattedCourses.length,
+      data: formattedCourses,
+    });
+  } catch (error) {
+    handleError(res, error, 'Failed to fetch courses by status');
   }
 };
 
@@ -826,7 +1149,7 @@ export const getTeacherCourseDetails = async (req, res) => {
 
 export const createLecture = async (req, res) => {
   try {
-    const { title, courseId, videoUrl } = req.body;
+    const { title, courseId, videoUrl, duration } = req.body;
     const resourceFiles = req.files?.resources || [];
 
     // Validation
@@ -856,7 +1179,7 @@ export const createLecture = async (req, res) => {
       }
     }
 
-    // Check if course exists
+    // Check if course exists and user has permission
     const course = await Course.findById(courseId);
     if (!course) {
       return res.status(404).json({
@@ -865,6 +1188,7 @@ export const createLecture = async (req, res) => {
       });
     }
 
+    // Check permission
     if (req.user.role === 'teacher') {
       const isTeacherOfThisCourse = course.teachers.some(
         (teacherId) => teacherId.toString() === req.user._id.toString()
@@ -878,7 +1202,7 @@ export const createLecture = async (req, res) => {
       }
     }
 
-    // Upload resource files to Cloudinary (if any)
+    // Upload resource files to Cloudinary
     const resources = [];
     for (const resourceFile of resourceFiles) {
       try {
@@ -900,19 +1224,21 @@ export const createLecture = async (req, res) => {
           title: resourceFile.originalname,
           fileUrl: uploadResult.secure_url,
           publicId: uploadResult.public_id,
+          fileType: resourceFile.mimetype,
+          fileSize: resourceFile.size
         });
       } catch (uploadError) {
         console.error('Resource upload error:', uploadError);
-        // Continue with other resources even if one fails
       }
     }
 
     // Create lecture
     const lecture = await Lecture.create({
       title: title.trim(),
-      videoUrl: videoUrl.trim(),
+      videoUrl: videoUrl?.trim(),
       course: courseId,
       resources,
+      duration: duration || 0,
     });
 
     // Add lecture to course
@@ -922,62 +1248,41 @@ export const createLecture = async (req, res) => {
       { new: true }
     );
 
-    const populatedLecture = await Lecture.findById(lecture._id).populate(
-      'course',
-      'title'
-    );
+    const populatedLecture = await Lecture.findById(lecture._id)
+      .populate('course', 'title');
 
     res.status(201).json({
       success: true,
       message: 'Lecture created successfully',
-      lecture: populatedLecture,
+      data: populatedLecture,
     });
   } catch (error) {
-    console.error('Create lecture error:', error);
-
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map((err) => err.message);
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: errors,
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
+    handleError(res, error, 'Failed to create lecture');
   }
-}; // Done
+};
 
 export const getLecturesByCourse = async (req, res) => {
   try {
     const { courseId } = req.params;
 
-    const lectures = await Lecture.find({ course: courseId }).sort({
-      createdAt: 1,
-    });
+    const lectures = await Lecture.find({ course: courseId })
+      .sort({ createdAt: 1 })
+      .select('-resources.publicId'); // Don't send publicId to client
 
     res.status(200).json({
       success: true,
-      lectures,
       count: lectures.length,
+      data: lectures,
     });
   } catch (error) {
-    console.error('Get lectures error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    handleError(res, error, 'Failed to fetch lectures');
   }
-}; // Done
+};
 
 export const updateLecture = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, videoUrl } = req.body;
+    const { title, videoUrl, duration } = req.body;
     const resourceFiles = req.files?.resources || [];
 
     const lecture = await Lecture.findById(id);
@@ -988,10 +1293,9 @@ export const updateLecture = async (req, res) => {
       });
     }
 
-    // --- Teacher Permission Check ---
+    // Check permission
     if (req.user.role === 'teacher') {
       const course = await Course.findById(lecture.course).select('teachers');
-
       const isTeacherOfCourse = course.teachers.some(
         (tId) => tId.toString() === req.user._id.toString()
       );
@@ -1004,12 +1308,11 @@ export const updateLecture = async (req, res) => {
       }
     }
 
-    // Update title
+    // Update fields
     if (title?.trim()) {
       lecture.title = title.trim();
     }
 
-    // Update video URL
     if (videoUrl?.trim()) {
       try {
         new URL(videoUrl);
@@ -1022,7 +1325,11 @@ export const updateLecture = async (req, res) => {
       }
     }
 
-    // New resources upload
+    if (duration !== undefined) {
+      lecture.duration = parseInt(duration) || 0;
+    }
+
+    // Upload new resources
     for (const resourceFile of resourceFiles) {
       try {
         const uploadResult = await new Promise((resolve, reject) => {
@@ -1043,28 +1350,27 @@ export const updateLecture = async (req, res) => {
           title: resourceFile.originalname,
           fileUrl: uploadResult.secure_url,
           publicId: uploadResult.public_id,
+          fileType: resourceFile.mimetype,
+          fileSize: resourceFile.size
         });
-      } catch (err) {}
+      } catch (err) {
+        console.error('Resource upload error:', err);
+      }
     }
 
     await lecture.save();
 
-    const updatedLecture = await Lecture.findById(id).populate(
-      'course',
-      'title'
-    );
+    const updatedLecture = await Lecture.findById(id)
+      .populate('course', 'title')
+      .select('-resources.publicId');
 
     res.status(200).json({
       success: true,
       message: 'Lecture updated successfully',
-      lecture: updatedLecture,
+      data: updatedLecture,
     });
   } catch (error) {
-    console.error('Update lecture error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    handleError(res, error, 'Failed to update lecture');
   }
 };
 
@@ -1072,7 +1378,9 @@ export const getLecture = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const lecture = await Lecture.findById(id).populate('course', 'title');
+    const lecture = await Lecture.findById(id)
+      .populate('course', 'title')
+      .select('-resources.publicId');
 
     if (!lecture) {
       return res.status(404).json({
@@ -1083,14 +1391,10 @@ export const getLecture = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      lecture,
+      data: lecture,
     });
   } catch (error) {
-    console.error('Get lecture error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    handleError(res, error, 'Failed to fetch lecture');
   }
 };
 
@@ -1106,10 +1410,9 @@ export const deleteLecture = async (req, res) => {
       });
     }
 
-    // --- Teacher Permission Check ---
+    // Check permission
     if (req.user.role === 'teacher') {
       const course = await Course.findById(lecture.course).select('teachers');
-
       const isTeacherOfCourse = course.teachers.some(
         (tId) => tId.toString() === req.user._id.toString()
       );
@@ -1142,11 +1445,7 @@ export const deleteLecture = async (req, res) => {
       message: 'Lecture deleted successfully',
     });
   } catch (error) {
-    console.error('Delete lecture error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    handleError(res, error, 'Failed to delete lecture');
   }
 };
 
@@ -1162,10 +1461,9 @@ export const deleteResource = async (req, res) => {
       });
     }
 
-    // --- Teacher Permission Check ---
+    // Check permission
     if (req.user.role === 'teacher') {
       const course = await Course.findById(lecture.course).select('teachers');
-
       const isTeacherOfCourse = course.teachers.some(
         (tId) => tId.toString() === req.user._id.toString()
       );
@@ -1186,7 +1484,7 @@ export const deleteResource = async (req, res) => {
       });
     }
 
-    // Delete resource file
+    // Delete resource file from Cloudinary
     if (resource.publicId) {
       await cloudinary.uploader.destroy(resource.publicId);
     }
@@ -1200,11 +1498,7 @@ export const deleteResource = async (req, res) => {
       message: 'Resource deleted successfully',
     });
   } catch (error) {
-    console.error('Delete resource error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    handleError(res, error, 'Failed to delete resource');
   }
 };
 
@@ -1213,42 +1507,157 @@ export const deleteResource = async (req, res) => {
 export const addCouponToCourse = async (req, res) => {
   try {
     const { id } = req.params; // courseId
-    const coupon = new Coupon({ ...req.body, course: id });
+
+    // Check if course exists
+    const course = await Course.findById(id);
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found'
+      });
+    }
+
+    // Check permission
+    if (req.user.role === 'teacher') {
+      const isTeacherOfCourse = course.teachers.some(
+        tId => tId.toString() === req.user._id.toString()
+      );
+      if (!isTeacherOfCourse) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not allowed to add coupons to this course'
+        });
+      }
+    }
+
+    // Check if coupon code already exists
+    const existingCoupon = await Coupon.findOne({ 
+      code: req.body.code,
+      course: id 
+    });
+    
+    if (existingCoupon) {
+      return res.status(400).json({
+        success: false,
+        message: 'Coupon code already exists for this course'
+      });
+    }
+
+    const coupon = new Coupon({ 
+      ...req.body, 
+      course: id,
+      createdAt: new Date()
+    });
+    
     await coupon.save();
 
-    await Course.findByIdAndUpdate(id, { $push: { coupons: coupon._id } });
+    await Course.findByIdAndUpdate(id, { 
+      $push: { coupons: coupon._id } 
+    });
 
-    res.status(201).json(coupon);
+    res.status(201).json({
+      success: true,
+      message: 'Coupon added successfully',
+      data: coupon
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    handleError(res, error, 'Failed to add coupon');
   }
 };
 
 export const updateCoupon = async (req, res) => {
   try {
-    const coupon = await Coupon.findByIdAndUpdate(
+    const coupon = await Coupon.findById(req.params.couponId).populate('course');
+
+    if (!coupon) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Coupon not found' 
+      });
+    }
+
+    // Check permission
+    if (req.user.role === 'teacher') {
+      const isTeacherOfCourse = coupon.course.teachers.some(
+        tId => tId.toString() === req.user._id.toString()
+      );
+      if (!isTeacherOfCourse) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not allowed to update this coupon'
+        });
+      }
+    }
+
+    // Check if updating code and if it already exists
+    if (req.body.code && req.body.code !== coupon.code) {
+      const existingCoupon = await Coupon.findOne({
+        code: req.body.code,
+        course: coupon.course._id,
+        _id: { $ne: coupon._id }
+      });
+      
+      if (existingCoupon) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coupon code already exists for this course'
+        });
+      }
+    }
+
+    const updatedCoupon = await Coupon.findByIdAndUpdate(
       req.params.couponId,
       req.body,
-      { new: true }
+      { new: true, runValidators: true }
     );
-    if (!coupon) return res.status(404).json({ message: 'Coupon not found' });
-    res.json(coupon);
+
+    res.json({
+      success: true,
+      message: 'Coupon updated successfully',
+      data: updatedCoupon
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    handleError(res, error, 'Failed to update coupon');
   }
 };
 
 export const deleteCoupon = async (req, res) => {
   try {
-    const coupon = await Coupon.findByIdAndDelete(req.params.couponId);
-    if (!coupon) return res.status(404).json({ message: 'Coupon not found' });
+    const coupon = await Coupon.findById(req.params.couponId).populate('course');
 
-    await Course.findByIdAndUpdate(coupon.course, {
+    if (!coupon) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Coupon not found' 
+      });
+    }
+
+    // Check permission
+    if (req.user.role === 'teacher') {
+      const isTeacherOfCourse = coupon.course.teachers.some(
+        tId => tId.toString() === req.user._id.toString()
+      );
+      if (!isTeacherOfCourse) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not allowed to delete this coupon'
+        });
+      }
+    }
+
+    // Remove coupon from course
+    await Course.findByIdAndUpdate(coupon.course._id, {
       $pull: { coupons: coupon._id },
     });
 
-    res.json({ message: 'Coupon deleted' });
+    // Delete coupon
+    await Coupon.findByIdAndDelete(req.params.couponId);
+
+    res.json({ 
+      success: true,
+      message: 'Coupon deleted successfully' 
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error, 'Failed to delete coupon');
   }
 };

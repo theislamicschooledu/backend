@@ -20,15 +20,18 @@ const courseSchema = new mongoose.Schema(
     ],
     teachers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     lectures: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Lecture' }],
-    enrollmentStart: { type: Date, required: true },
-    enrollmentEnd: { type: Date, required: true },
-    courseStart: { type: Date, required: true },
+    
+    enrollmentStart: { type: Date }, 
+    enrollmentEnd: { type: Date },  
+    courseStart: { type: Date },
+    
     duration: { type: Number, required: true },
     status: {
       type: String,
       enum: ['pending', 'published', 'rejected'],
       default: 'pending',
     },
+    isUpcoming : {type: Boolean, default: false},
     featured: { type: Boolean, default: false },
     coupons: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' }],
     studentCount: {
