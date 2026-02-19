@@ -1,29 +1,32 @@
 import express from 'express';
-import { adminOnly, protect } from '../middlewares/auth.js';
 import {
-  completeLecture,
-  enrollCourse,
-  getAllEnrollments,
-  getEnrollmentByCourse,
-  // getLearningProgress,
-  incompleteLecture,
-  // markLectureComplete,
-  myEnrollments,
+  approveManualEnrollment,
+  createManualEnrollment,
+  getMyEnrollments,
+  getPendingEnrollments,
+  rejectManualEnrollment,
 } from '../controller/enrollmentController.js';
+import { adminOnly, protect } from '../middlewares/auth.js';
 
 const enrollmentRouter = express.Router();
 
-enrollmentRouter.post('/', enrollCourse);
+// পাবলিক রাউট - ম্যানুয়াল এনরোলমেন্ট রিকোয়েস্ট
+enrollmentRouter.post('/manual', protect, createManualEnrollment);
+enrollmentRouter.get('/my-enrollments', protect, getMyEnrollments);
 
-enrollmentRouter.get('/me', protect, myEnrollments);
-
-enrollmentRouter.get('/', adminOnly, getAllEnrollments);
-
-enrollmentRouter.get('/course/:courseId', protect, getEnrollmentByCourse);
-// enrollmentRouter.post('/:enrollmentId/complete-lecture', protect, markLectureComplete);
-// enrollmentRouter.get('/progress', protect, getLearningProgress);
-
-enrollmentRouter.post('/:enrollmentId/complete-lecture', protect, completeLecture);
-enrollmentRouter.post('/:enrollmentId/incomplete-lecture', protect, incompleteLecture)
+// অ্যাডমিন রাউট
+enrollmentRouter.get('/pending', protect, adminOnly, getPendingEnrollments);
+enrollmentRouter.put(
+  '/:enrollmentId/approve',
+  protect,
+  adminOnly,
+  approveManualEnrollment
+);
+enrollmentRouter.put(
+  '/:enrollmentId/reject',
+  protect,
+  adminOnly,
+  rejectManualEnrollment
+);
 
 export default enrollmentRouter;

@@ -296,62 +296,77 @@ export const deleteCoupon = async (req, res) => {
 };
 
 // Validate coupon
+// Validate coupon (পাবলিক API)
 export const validateCoupon = async (req, res) => {
   try {
-    const { code, courseId } = req.body;
+    const { couponCode, courseId } = req.body;
 
-    if (!code?.trim()) {
+    console.log('Validating coupon:', couponCode, 'for course:', courseId);
+
+    if (!couponCode?.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Coupon code is required'
+        message: 'কুপন কোড দিন'
       });
     }
 
     if (!courseId) {
       return res.status(400).json({
         success: false,
-        message: 'Course ID is required'
+        message: 'কোর্স আইডি দিন'
       });
     }
 
+    // কুপন খোঁজা
     const coupon = await Coupon.findOne({ 
-      code: code.trim().toUpperCase(),
-      course: courseId
+      code: couponCode.trim().toUpperCase(),
+      course: courseId,
+      isActive: true
     }).populate('course', 'title price');
+
+    console.log('Coupon found:', coupon);
 
     if (!coupon) {
       return res.status(404).json({
         success: false,
-        message: 'Invalid coupon code'
+        message: 'কুপনটি এই কোর্সের জন্য বৈধ নয়'
       });
     }
 
-    // Check if coupon is expired
+    // মেয়াদ চেক
     if (coupon.expiryDate && new Date() > new Date(coupon.expiryDate)) {
       return res.status(400).json({
         success: false,
-        message: 'Coupon has expired'
+        message: 'কুপনটির মেয়াদ শেষ হয়ে গেছে'
       });
     }
 
-    // Check usage limit
+    // ইউজেজ লিমিট চেক
     if (coupon.usedCount >= coupon.usageLimit) {
       return res.status(400).json({
         success: false,
-        message: 'Coupon usage limit reached'
+        message: 'কুপনটি আর ব্যবহার করা যাবে না'
       });
     }
 
-    // Calculate discounted price
+    // ডিসকাউন্ট ক্যালকুলেশন
+    let discountAmount = 0;
     let discountedPrice = coupon.course.price;
+
     if (coupon.discountType === 'percentage') {
-      discountedPrice = coupon.course.price * (1 - coupon.discountValue / 100);
-    } else if (coupon.discountType === 'flat') {
-      discountedPrice = Math.max(0, coupon.course.price - coupon.discountValue);
+      discountAmount = (coupon.course.price * coupon.discountValue) / 100;
+      if (coupon.maxDiscountAmount) {
+        discountAmount = Math.min(discountAmount, coupon.maxDiscountAmount);
+      }
+      discountedPrice = coupon.course.price - discountAmount;
+    } else {
+      discountAmount = coupon.discountValue;
+      discountedPrice = Math.max(0, coupon.course.price - discountAmount);
     }
 
     res.status(200).json({
       success: true,
+      message: 'কুপন সফলভাবে যাচাই হয়েছে',
       coupon: {
         _id: coupon._id,
         code: coupon.code,
@@ -359,7 +374,8 @@ export const validateCoupon = async (req, res) => {
         discountValue: coupon.discountValue,
         originalPrice: coupon.course.price,
         discountedPrice: discountedPrice,
-        savings: coupon.course.price - discountedPrice
+        discountAmount: discountAmount,
+        savings: discountAmount
       }
     });
 
@@ -367,7 +383,7 @@ export const validateCoupon = async (req, res) => {
     console.error('Validate coupon error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'সার্ভার এরর'
     });
   }
 };

@@ -32,7 +32,7 @@ app.use('/api/blogs', blogRouter);
 app.use('/api/qna', questionRouter);
 app.use('/api/courses', courseRouter);
 app.use('/api/coupons', couponRouter);
-app.use('/api/enrollment', enrollmentRouter);
+app.use('/api/enrollments', enrollmentRouter);
 app.use('/api/payments', paymentRouter);
 app.use('/api/documentation', documentationRouter);
 
