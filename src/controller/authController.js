@@ -30,7 +30,7 @@ export const signUp = async (req, res) => {
       100000 + Math.random() * 900000
     ).toString();
 
-    const user = new User({
+    const user = await User.create({
       name,
       email,
       phone,
@@ -39,31 +39,34 @@ export const signUp = async (req, res) => {
       verificationTokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
     });
 
-    // jwt
     generateTokenAndSetCookie(res, user._id);
 
-    // Email sending
-    await sendEmail(
-      email,
-      'Your verification code for sign in',
-      getVerificationEmailHtml(verificationToken, name)
-    );
-
-    await user.save();
+    try {
+      await sendEmail(
+        email,
+        'Your verification code for sign in',
+        getVerificationEmailHtml(verificationToken, name)
+      );
+    } catch (emailError) {
+      console.log("Email error:", emailError.message);
+    }
 
     res.status(201).json({
       success: true,
-      message: 'user created successfully',
+      message: 'User created successfully',
       user: {
         ...user._doc,
         password: undefined,
         otp: undefined,
       },
     });
+
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    console.log("Signup error:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
+
 
 export const logIn = async (req, res) => {
   try {
