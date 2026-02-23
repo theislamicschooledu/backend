@@ -34,7 +34,7 @@ export const getVerificationEmailHtml = (otp, username) => {
             <tr>
               <td style="background-color: #f4f4f4; text-align: center; padding: 20px;">
                 <p style="font-size: 12px; color: #999999;">
-                  &copy; ${new Date().getFullYear()} Rangpur Zen-Z Online Shop. All rights reserved.
+                  &copy; ${new Date().getFullYear()} The Islamic School. All rights reserved.
                 </p>
               </td>
             </tr>
