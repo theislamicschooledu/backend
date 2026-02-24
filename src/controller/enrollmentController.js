@@ -4,7 +4,6 @@ import User from "../models/User.js";
 import Coupon from "../models/Coupon.js"; // কুপন মডেল ইম্পোর্ট করুন
 import Lecture from "../models/Lecture.js";
 
-// ম্যানুয়াল এনরোলমেন্ট রিকোয়েস্ট তৈরি (শুধুমাত্র লগইন করা ইউজার)
 export const createManualEnrollment = async (req, res) => {
   try {
     const { 
@@ -17,7 +16,7 @@ export const createManualEnrollment = async (req, res) => {
       couponCode 
     } = req.body;
 
-    // **ইম্পরট্যান্ট: ইউজার লগইন করা আছে কিনা চেক**
+    // ইউজার লগইন চেক
     if (!req.user) {
       return res.status(401).json({ 
         success: false,
@@ -25,7 +24,7 @@ export const createManualEnrollment = async (req, res) => {
       });
     }
 
-    // ভ্যালিডেশন: প্রয়োজনীয় ফিল্ড চেক
+    // ভ্যালিডেশন
     if (!studentName || !mobileNumber || !transactionId || !paymentMethod || !amount || !courseId) {
       return res.status(400).json({ 
         success: false,
@@ -42,7 +41,7 @@ export const createManualEnrollment = async (req, res) => {
       });
     }
 
-    // ট্রানজেকশন আইডি ইউনিক চেক (কেস ইন্সেনসিটিভ)
+    // ট্রানজেকশন আইডি ইউনিক চেক
     const existingEnrollment = await Enrollment.findOne({ 
       transactionId: { $regex: new RegExp(`^${transactionId}$`, 'i') }
     });
@@ -54,7 +53,7 @@ export const createManualEnrollment = async (req, res) => {
       });
     }
 
-    // কোর্সের তথ্য পাওয়া
+    // কোর্স চেক
     const course = await Course.findById(courseId);
     if (!course) {
       return res.status(404).json({ 
@@ -63,9 +62,8 @@ export const createManualEnrollment = async (req, res) => {
       });
     }
 
-    // **লগইন করা ইউজারকেই ব্যবহার করুন**
+    // ইউজার চেক
     const user = await User.findById(req.user._id);
-    
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -73,44 +71,64 @@ export const createManualEnrollment = async (req, res) => {
       });
     }
 
-    console.log('Enrollment requested by logged in user:', {
+    console.log('Enrollment requested by:', {
       userId: user._id.toString(),
       name: user.name,
       phone: user.phone,
-      email: user.email
+      course: course.title
     });
 
-    // চেক করুন ফর্মে দেওয়া মোবাইল নম্বর ইউজারের মোবাইল নম্বরের সাথে মিলছে কিনা
-    if (user.phone !== mobileNumber) {
-      return res.status(400).json({
-        success: false,
-        message: 'আপনার দেওয়া মোবাইল নম্বর আপনার অ্যাকাউন্টের মোবাইল নম্বরের সাথে মেলেনি'
-      });
-    }
-
-    // চেক করুন ফর্মে দেওয়া নাম ইউজারের নামের সাথে মিলছে কিনা
+    // **চেক করুন ইউজারের নাম ও মোবাইল মিলছে কিনা**
     if (user.name !== studentName) {
       return res.status(400).json({
         success: false,
-        message: 'আপনার দেওয়া নাম আপনার অ্যাকাউন্টের নামের সাথে মেলেনি'
+        message: 'আপনার দেওয়া নাম আপনার অ্যাকাউন্টের নামের সাথে মেলেনি'
       });
     }
 
-    // ডুপ্লিকেট এনরোলমেন্ট চেক
-    const existingUserEnrollment = await Enrollment.findOne({
+    if (user.phone !== mobileNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'আপনার দেওয়া মোবাইল নম্বর আপনার অ্যাকাউন্টের মোবাইল নম্বরের সাথে মেলেনি'
+      });
+    }
+
+    // **স্টেপ 1: আগের সব পেন্ডিং/কমপ্লিটেড এনরোলমেন্ট চেক করুন**
+    const existingActiveEnrollment = await Enrollment.findOne({
       student: user._id,
       course: courseId,
       paymentStatus: { $in: ['pending', 'completed'] }
     });
 
-    if (existingUserEnrollment) {
+    if (existingActiveEnrollment) {
       return res.status(400).json({
         success: false,
         message: 'আপনি ইতিমধ্যে এই কোর্সে এনরোল করেছেন অথবা আপনার একটি পেন্ডিং রিকোয়েস্ট আছে'
       });
     }
 
-    // **কুপন ভ্যালিডেশন ও ডিসকাউন্ট ক্যালকুলেশন**
+    // **স্টেপ 2: আগের cancelled এনরোলমেন্ট খুঁজে বের করুন**
+    const existingCancelledEnrollment = await Enrollment.findOne({
+      student: user._id,
+      course: courseId,
+      paymentStatus: 'cancelled'
+    });
+
+    // **স্টেপ 3: cancelled এনরোলমেন্ট থাকলে ডিলিট করুন**
+    if (existingCancelledEnrollment) {
+      console.log('Found cancelled enrollment. Deleting...', {
+        enrollmentId: existingCancelledEnrollment._id,
+        oldTransactionId: existingCancelledEnrollment.transactionId,
+        rejectionReason: existingCancelledEnrollment.paymentDetails?.rejectionReason
+      });
+
+      // cancelled এনরোলমেন্ট ডিলিট করুন
+      await Enrollment.findByIdAndDelete(existingCancelledEnrollment._id);
+      
+      console.log('Previous cancelled enrollment deleted successfully');
+    }
+
+    // **স্টেপ 4: কুপন ভ্যালিডেশন**
     let finalAmount = course.price;
     let discountAmount = 0;
     let appliedCoupon = null;
@@ -119,7 +137,6 @@ export const createManualEnrollment = async (req, res) => {
     if (couponCode) {
       console.log('Validating coupon:', couponCode, 'for course:', courseId);
 
-      // কুপন খোঁজা
       const coupon = await Coupon.findOne({
         code: couponCode.toUpperCase(),
         course: courseId,
@@ -137,25 +154,10 @@ export const createManualEnrollment = async (req, res) => {
         });
       }
 
-      // ইউজেজ লিমিট চেক
       if (coupon.usedCount >= coupon.usageLimit) {
         return res.status(400).json({
           success: false,
           message: 'কুপনটির ব্যবহার সীমা শেষ হয়েছে'
-        });
-      }
-
-      // চেক করুন ইউজার আগে এই কুপন ব্যবহার করেছে কিনা
-      const existingCouponUsage = await Enrollment.findOne({
-        student: user._id,
-        couponUsed: coupon._id,
-        paymentStatus: { $in: ['completed', 'pending'] }
-      });
-
-      if (existingCouponUsage) {
-        return res.status(400).json({
-          success: false,
-          message: 'আপনি ইতিমধ্যে এই কুপন ব্যবহার করেছেন'
         });
       }
 
@@ -169,10 +171,8 @@ export const createManualEnrollment = async (req, res) => {
         discountAmount = coupon.discountValue;
       }
 
-      // ফাইনাল অ্যামাউন্ট
       finalAmount = Math.max(0, course.price - discountAmount);
       
-      // অ্যামাউন্ট মিলছে কিনা চেক (ফ্রন্টএন্ড থেকে পাঠানো অ্যামাউন্ট)
       const frontendAmount = parseFloat(amount);
       if (Math.abs(finalAmount - frontendAmount) > 1) {
         return res.status(400).json({
@@ -184,7 +184,6 @@ export const createManualEnrollment = async (req, res) => {
       appliedCoupon = coupon._id;
 
     } else {
-      // কুপন ছাড়া অ্যামাউন্ট চেক
       if (parseFloat(amount) !== course.price) {
         return res.status(400).json({
           success: false,
@@ -193,7 +192,7 @@ export const createManualEnrollment = async (req, res) => {
       }
     }
 
-    // **এনরোলমেন্ট তৈরি**
+    // **স্টেপ 5: নতুন এনরোলমেন্ট তৈরি করুন**
     const enrollment = new Enrollment({
       student: user._id,
       course: courseId,
@@ -211,7 +210,9 @@ export const createManualEnrollment = async (req, res) => {
         isManual: true,
         submittedAt: new Date(),
         transactionId: transactionId,
-        couponCode: couponCode || null
+        couponCode: couponCode || null,
+        isReenrollment: existingCancelledEnrollment ? true : false, // ট্র্যাক করুন যে এটি রি-এনরোলমেন্ট
+        previousEnrollmentDeleted: existingCancelledEnrollment ? true : false
       }
     });
 
@@ -224,25 +225,75 @@ export const createManualEnrollment = async (req, res) => {
       });
     }
 
+    console.log('New enrollment created successfully:', {
+      enrollmentId: enrollment._id,
+      isReenrollment: existingCancelledEnrollment ? true : false
+    });
+
     res.status(201).json({ 
       success: true,
-      message: 'আপনার এনরোলমেন্ট রিকোয়েস্ট জমা দেওয়া হয়েছে। অ্যাডমিন অ্যাপ্রুভ করার পর আপনি এক্সেস পাবেন।',
+      message: existingCancelledEnrollment 
+        ? 'আপনার পুনঃএনরোলমেন্ট রিকোয়েস্ট জমা দেওয়া হয়েছে। অ্যাডমিন অ্যাপ্রুভ করার পর আপনি এক্সেস পাবেন।'
+        : 'আপনার এনরোলমেন্ট রিকোয়েস্ট জমা দেওয়া হয়েছে। অ্যাডমিন অ্যাপ্রুভ করার পর আপনি এক্সেস পাবেন।',
       data: {
         enrollmentId: enrollment._id,
         amount: finalAmount,
         discountAmount: discountAmount,
-        originalAmount: originalAmount
+        originalAmount: originalAmount,
+        isReenrollment: existingCancelledEnrollment ? true : false
       }
     });
 
   } catch (error) {
     console.error('Manual enrollment error:', error);
+    
+    // ডুপ্লিকেট কী ইরর হ্যান্ডলিং
+    if (error.code === 11000) {
+      // যদি ডুপ্লিকেট ইরর আসে, তাহলে আবার চেক করে দেখি
+      try {
+        const { courseId } = req.body;
+        const userId = req.user._id;
+        
+        // কোন স্ট্যাটাসের এনরোলমেন্ট আছে?
+        const existingEnrollment = await Enrollment.findOne({
+          student: userId,
+          course: courseId
+        });
+
+        if (existingEnrollment) {
+          if (existingEnrollment.paymentStatus === 'cancelled') {
+            // cancelled থাকলে ডিলিট করে দিন
+            await Enrollment.findByIdAndDelete(existingEnrollment._id);
+            
+            return res.status(400).json({
+              success: false,
+              message: 'আগের রিজেক্টেড এনরোলমেন্ট ডিলিট করা হয়েছে। আবার চেষ্টা করুন।',
+              retry: true
+            });
+          } else {
+            return res.status(400).json({
+              success: false,
+              message: `এই কোর্সে আপনি ইতিমধ্যে ${existingEnrollment.paymentStatus} স্ট্যাটাসে একটি এনরোলমেন্ট করেছেন।`
+            });
+          }
+        }
+      } catch (innerError) {
+        console.error('Error handling duplicate key:', innerError);
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'এই কোর্সে আপনি ইতিমধ্যে একটি এনরোলমেন্ট করেছেন।'
+      });
+    }
+    
     res.status(500).json({ 
       success: false,
       message: 'সার্ভার এরর হয়েছে। আবার চেষ্টা করুন।'
     });
   }
 };
+
 // অ্যাডমিনের জন্য পেন্ডিং এনরোলমেন্ট লিস্ট দেখা (সার্চ অপশন সহ)
 export const getPendingEnrollments = async (req, res) => {
   try {
@@ -381,10 +432,15 @@ export const approveManualEnrollment = async (req, res) => {
 };
 
 // এনরোলমেন্ট রিজেক্ট করা
+// এনরোলমেন্ট রিজেক্ট করা (আপডেটেড)
 export const rejectManualEnrollment = async (req, res) => {
   try {
     const { enrollmentId } = req.params;
     const { reason } = req.body;
+
+    console.log('Rejecting enrollment:', enrollmentId);
+    console.log('Reason:', reason);
+    console.log('Admin user:', req.user._id);
 
     if (!reason) {
       return res.status(400).json({
@@ -393,10 +449,8 @@ export const rejectManualEnrollment = async (req, res) => {
       });
     }
 
-    const enrollment = await Enrollment.findById(enrollmentId)
-      .populate('student')
-      .populate('course');
-
+    const enrollment = await Enrollment.findById(enrollmentId);
+      
     if (!enrollment) {
       return res.status(404).json({ 
         success: false,
@@ -404,33 +458,54 @@ export const rejectManualEnrollment = async (req, res) => {
       });
     }
 
+    console.log('Found enrollment:', {
+      id: enrollment._id,
+      currentStatus: enrollment.paymentStatus,
+      paymentDetails: enrollment.paymentDetails
+    });
+
     // যদি ইতিমধ্যে প্রসেস করা থাকে
     if (enrollment.paymentStatus !== 'pending') {
       return res.status(400).json({
         success: false,
-        message: 'এই এনরোলমেন্ট ইতিমধ্যে প্রসেস করা হয়েছে'
+        message: `এই এনরোলমেন্ট ইতিমধ্যে ${enrollment.paymentStatus} অবস্থায় আছে`
       });
     }
 
-    enrollment.paymentStatus = 'cancelled';
-    enrollment.paymentDetails.rejectedBy = req.user._id;
-    enrollment.paymentDetails.rejectedAt = new Date();
-    enrollment.paymentDetails.rejectionReason = reason;
+    // পেমেন্ট ডিটেইলস অবজেক্ট তৈরি/আপডেট
+    const paymentDetails = enrollment.paymentDetails || {};
     
+    // এনরোলমেন্ট আপডেট
+    enrollment.paymentStatus = 'cancelled';
+    enrollment.paymentDetails = {
+      ...paymentDetails,
+      rejectedBy: req.user._id,
+      rejectedAt: new Date(),
+      rejectionReason: reason,
+      status: 'cancelled'
+    };
+    
+    // সংরক্ষণ
     await enrollment.save();
+    
+    console.log('Enrollment rejected successfully:', {
+      id: enrollment._id,
+      status: enrollment.paymentStatus,
+      rejectedBy: enrollment.paymentDetails.rejectedBy,
+      rejectedAt: enrollment.paymentDetails.rejectedAt,
+      reason: enrollment.paymentDetails.rejectionReason
+    });
 
-    // TODO: স্টুডেন্টকে নোটিফিকেশন পাঠানো
-    // if (enrollment.student.email) {
-    //   sendRejectionEmail(enrollment.student.email, enrollment.course.title, reason);
-    // }
+    // পপুলেটেড ডাটা সহ ফেরত পাঠান
+    const updatedEnrollment = await Enrollment.findById(enrollmentId)
+      .populate('student', 'name phone email')
+      .populate('course', 'title price')
+      .populate('paymentDetails.rejectedBy', 'name email');
 
     res.json({ 
       success: true,
       message: 'এনরোলমেন্ট রিজেক্ট করা হয়েছে',
-      data: {
-        enrollmentId: enrollment._id,
-        reason: reason
-      }
+      data: updatedEnrollment
     });
 
   } catch (error) {
@@ -438,7 +513,7 @@ export const rejectManualEnrollment = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'সার্ভার এরর',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message
     });
   }
 };

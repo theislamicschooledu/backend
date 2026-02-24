@@ -1,3 +1,4 @@
+// models/Enrollment.js
 import mongoose from 'mongoose';
 
 const enrollmentSchema = new mongoose.Schema(
@@ -47,8 +48,25 @@ const enrollmentSchema = new mongoose.Schema(
       default: 'uddoktapay'
     },
     paymentDetails: {
-      type: Object,
-      default: {}
+      method: String,
+      submittedBy: String,
+      mobileNumber: String,
+      isManual: Boolean,
+      submittedAt: Date,
+      transactionId: String,
+      couponCode: String,
+      adminApprovedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+      },
+      adminApprovedAt: Date,
+      adminNotes: String,
+      rejectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+      },
+      rejectedAt: Date,
+      rejectionReason: String
     },
     enrolledAt: {
       type: Date,
@@ -63,10 +81,7 @@ const enrollmentSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       min: 0,
-      max: 100,
-      set: function(value) {
-        return Math.min(100, Math.max(0, Math.round(value)));
-      }
+      max: 100
     },
     completedLectures: [{
       type: mongoose.Schema.Types.ObjectId,
