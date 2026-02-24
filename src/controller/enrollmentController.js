@@ -2,6 +2,7 @@ import Course from "../models/Course.js";
 import Enrollment from "../models/Enrollment.js";
 import User from "../models/User.js";
 import Coupon from "../models/Coupon.js"; // কুপন মডেল ইম্পোর্ট করুন
+import Lecture from "../models/Lecture.js";
 
 // ম্যানুয়াল এনরোলমেন্ট রিকোয়েস্ট তৈরি (শুধুমাত্র লগইন করা ইউজার)
 export const createManualEnrollment = async (req, res) => {
@@ -546,6 +547,196 @@ export const getMyEnrollments = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'সার্ভার এরর'
+    });
+  }
+};
+
+export const getEnrollmentByCourse = async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const userId = req.user._id;
+
+    const enrollment = await Enrollment.findOne({
+      student: userId,
+      course: courseId,
+      paymentStatus: 'completed'
+    })
+    .populate('completedLectures', 'title')
+    .populate('course', 'title duration');
+
+    if (!enrollment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Enrollment not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      enrollment
+    });
+  } catch (error) {
+    console.error('Get enrollment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch enrollment'
+    });
+  }
+};
+
+
+export const completeLecture = async (req, res) => {
+  try {
+    const { enrollmentId } = req.params;
+    const { lectureId } = req.body;
+    const userId = req.user._id;
+
+    // Find enrollment and verify ownership
+    const enrollment = await Enrollment.findOne({
+      _id: enrollmentId,
+      student: userId,
+      paymentStatus: 'completed'
+    });
+
+    if (!enrollment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Enrollment not found'
+      });
+    }
+
+    // Check if lecture exists and belongs to the course
+    const lecture = await Lecture.findOne({
+      _id: lectureId,
+      course: enrollment.course
+    });
+
+    if (!lecture) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lecture not found in this course'
+      });
+    }
+
+    // Check if already completed
+    if (enrollment.completedLectures.includes(lectureId)) {
+      return res.json({
+        success: true,
+        message: 'Lecture already completed',
+        enrollment,
+        progress: enrollment.progress
+      });
+    }
+
+    // Add lecture to completed list
+    enrollment.completedLectures.push(lectureId);
+
+    // Get total lectures count
+    const totalLectures = await Lecture.countDocuments({ 
+      course: enrollment.course 
+    });
+
+    // Calculate progress
+    const completedCount = enrollment.completedLectures.length;
+    const progress = Math.round((completedCount / totalLectures) * 100);
+
+    enrollment.progress = progress;
+
+    // Check if course is completed
+    if (progress >= 100) {
+      enrollment.completionStatus = 'completed';
+    }
+
+    enrollment.lastActivity = new Date();
+    await enrollment.save();
+
+    // Populate completed lectures
+    await enrollment.populate('completedLectures', 'title');
+
+    res.json({
+      success: true,
+      message: 'Lecture marked as completed',
+      enrollment,
+      progress: enrollment.progress
+    });
+  } catch (error) {
+    console.error('Complete lecture error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark lecture as complete'
+    });
+  }
+};
+
+
+export const incompleteLecture = async (req, res) => {
+  try {
+    const { enrollmentId } = req.params;
+    const { lectureId } = req.body;
+    const userId = req.user._id;
+
+    // Find enrollment and verify ownership
+    const enrollment = await Enrollment.findOne({
+      _id: enrollmentId,
+      student: userId,
+      paymentStatus: 'completed'
+    });
+
+    if (!enrollment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Enrollment not found'
+      });
+    }
+
+    // Check if lecture is in completed list
+    if (!enrollment.completedLectures.includes(lectureId)) {
+      return res.json({
+        success: true,
+        message: 'Lecture not in completed list',
+        enrollment,
+        progress: enrollment.progress
+      });
+    }
+
+    // Remove lecture from completed list
+    enrollment.completedLectures = enrollment.completedLectures.filter(
+      id => id.toString() !== lectureId.toString()
+    );
+
+    // Get total lectures count
+    const totalLectures = await Lecture.countDocuments({ 
+      course: enrollment.course 
+    });
+
+    // Calculate progress
+    const completedCount = enrollment.completedLectures.length;
+    const progress = Math.round((completedCount / totalLectures) * 100);
+
+    enrollment.progress = progress;
+    
+    // Update completion status
+    if (progress < 100) {
+      enrollment.completionStatus = 'in-progress';
+    }
+
+    enrollment.lastActivity = new Date();
+    await enrollment.save();
+
+    // Populate completed lectures
+    await enrollment.populate('completedLectures', 'title');
+
+    res.json({
+      success: true,
+      message: 'Lecture marked as incomplete',
+      enrollment,
+      progress: enrollment.progress
+    });
+  } catch (error) {
+    console.error('Incomplete lecture error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark lecture as incomplete'
     });
   }
 };

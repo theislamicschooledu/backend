@@ -15,57 +15,57 @@ const COURSE_STATUS = {
   ENROLLMENT_CLOSED: 'enrollment_closed',
   COURSE_STARTED: 'course_started',
   PUBLISHED: 'published',
-  PENDING: 'pending'
+  PENDING: 'pending',
 };
 
 // Helper function to determine course status based on dates
 const getCourseStatus = (course) => {
   const now = new Date();
-  
+
   // If isUpcoming is true, it's always "coming soon"
   if (course.isUpcoming === true) {
     return COURSE_STATUS.COMING_SOON;
   }
-  
+
   // If any of the dates is missing, it's "coming soon"
   if (!course.enrollmentStart || !course.enrollmentEnd || !course.courseStart) {
     return COURSE_STATUS.COMING_SOON;
   }
-  
+
   // If enrollment hasn't started yet
   if (now < course.enrollmentStart) {
     return COURSE_STATUS.UPCOMING;
   }
-  
+
   // If enrollment is open
   if (now >= course.enrollmentStart && now <= course.enrollmentEnd) {
     return COURSE_STATUS.ENROLLMENT_OPEN;
   }
-  
+
   // If enrollment closed but course hasn't started
   if (now > course.enrollmentEnd && now < course.courseStart) {
     return COURSE_STATUS.ENROLLMENT_CLOSED;
   }
-  
+
   // If course has started
   if (now >= course.courseStart) {
     return COURSE_STATUS.COURSE_STARTED;
   }
-  
+
   return COURSE_STATUS.PUBLISHED; // fallback
 };
 
 // Format course response with additional status info
 const formatCourseResponse = (course) => {
   if (!course) return null;
-  
+
   const courseObj = course.toObject ? course.toObject() : course;
   const currentStatus = getCourseStatus(course);
-  
+
   return {
     ...courseObj,
     currentStatus,
-    isComingSoon: currentStatus === COURSE_STATUS.COMING_SOON
+    isComingSoon: currentStatus === COURSE_STATUS.COMING_SOON,
   };
 };
 
@@ -76,30 +76,30 @@ const handleError = (res, error, customMessage = 'Internal server error') => {
   if (error.name === 'CastError') {
     return res.status(400).json({
       success: false,
-      message: 'Invalid ID format'
+      message: 'Invalid ID format',
     });
   }
 
   if (error.name === 'ValidationError') {
-    const errors = Object.values(error.errors).map(err => err.message);
+    const errors = Object.values(error.errors).map((err) => err.message);
     return res.status(400).json({
       success: false,
       message: 'Validation error',
-      errors
+      errors,
     });
   }
 
   if (error.code === 11000) {
     return res.status(400).json({
       success: false,
-      message: 'Duplicate key error. A record with this value already exists.'
+      message: 'Duplicate key error. A record with this value already exists.',
     });
   }
 
   res.status(500).json({
     success: false,
     message: customMessage,
-    ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    ...(process.env.NODE_ENV === 'development' && { stack: error.stack }),
   });
 };
 
@@ -127,7 +127,8 @@ export const createCourse = async (req, res) => {
     if (!title || !price || !description || !category || !duration) {
       return res.status(400).json({
         success: false,
-        message: 'Title, price, description, category, and duration are required fields',
+        message:
+          'Title, price, description, category, and duration are required fields',
       });
     }
 
@@ -147,7 +148,7 @@ export const createCourse = async (req, res) => {
             .filter(Boolean);
         }
       }
-      
+
       if (!Array.isArray(featuresArray)) {
         featuresArray = [];
       }
@@ -172,17 +173,18 @@ export const createCourse = async (req, res) => {
       finalEnrollmentStart = enrollmentStart ? new Date(enrollmentStart) : null;
       finalEnrollmentEnd = enrollmentEnd ? new Date(enrollmentEnd) : null;
       finalCourseStart = courseStart ? new Date(courseStart) : null;
-    } 
-    else if (enrollmentStart && enrollmentEnd && courseStart) {
+    } else if (enrollmentStart && enrollmentEnd && courseStart) {
       // All dates provided - validate them
       finalEnrollmentStart = new Date(enrollmentStart);
       finalEnrollmentEnd = new Date(enrollmentEnd);
       finalCourseStart = new Date(courseStart);
 
       // Check if dates are valid
-      if (isNaN(finalEnrollmentStart.getTime()) || 
-          isNaN(finalEnrollmentEnd.getTime()) || 
-          isNaN(finalCourseStart.getTime())) {
+      if (
+        isNaN(finalEnrollmentStart.getTime()) ||
+        isNaN(finalEnrollmentEnd.getTime()) ||
+        isNaN(finalCourseStart.getTime())
+      ) {
         return res.status(400).json({
           success: false,
           message: 'Invalid date format',
@@ -202,12 +204,13 @@ export const createCourse = async (req, res) => {
           message: 'Course must start on or after enrollment ends',
         });
       }
-      
+
       finalIsUpcoming = false;
     } else {
       return res.status(400).json({
         success: false,
-        message: 'Regular courses require all dates (enrollmentStart, enrollmentEnd, courseStart)',
+        message:
+          'Regular courses require all dates (enrollmentStart, enrollmentEnd, courseStart)',
       });
     }
 
@@ -221,8 +224,10 @@ export const createCourse = async (req, res) => {
     // Validate teachers
     let teachersArray = [];
     if (teachers) {
-      teachersArray = Array.isArray(teachers) ? teachers : [teachers].filter(Boolean);
-      
+      teachersArray = Array.isArray(teachers)
+        ? teachers
+        : [teachers].filter(Boolean);
+
       if (teachersArray.length > 0) {
         const existingTeachers = await User.find({
           _id: { $in: teachersArray },
@@ -232,7 +237,8 @@ export const createCourse = async (req, res) => {
         if (existingTeachers.length !== teachersArray.length) {
           return res.status(400).json({
             success: false,
-            message: 'One or more selected teachers do not exist or are not teachers',
+            message:
+              'One or more selected teachers do not exist or are not teachers',
           });
         }
       }
@@ -252,7 +258,12 @@ export const createCourse = async (req, res) => {
     let thumbnailPublicId = null;
 
     if (req.file) {
-      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      const allowedMimeTypes = [
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/webp',
+      ];
       if (!allowedMimeTypes.includes(req.file.mimetype)) {
         return res.status(400).json({
           success: false,
@@ -342,26 +353,26 @@ export const addCourseCategory = async (req, res) => {
     const { name } = req.body;
 
     if (!name?.trim()) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Category name is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Category name is required',
       });
     }
 
     const existing = await CourseCategory.findOne({ name: name.trim() });
     if (existing) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Category already exists' 
+      return res.status(400).json({
+        success: false,
+        message: 'Category already exists',
       });
     }
 
     const category = await CourseCategory.create({ name: name.trim() });
-    
-    res.status(201).json({ 
-      success: true, 
+
+    res.status(201).json({
+      success: true,
       message: 'Category added successfully',
-      data: category 
+      data: category,
     });
   } catch (error) {
     handleError(res, error, 'Failed to create category');
@@ -372,10 +383,10 @@ export const getCourseCategory = async (req, res) => {
   try {
     const categories = await CourseCategory.find().sort({ name: 1 });
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       count: categories.length,
-      data: categories 
+      data: categories,
     });
   } catch (error) {
     handleError(res, error, 'Failed to get categories');
@@ -386,16 +397,16 @@ export const getPublishCourses = async (req, res) => {
   try {
     const { status, upcoming } = req.query;
     const now = new Date();
-    
+
     let query = { status: 'published' };
-    
+
     // Filter by upcoming
     if (upcoming === 'true') {
       query.isUpcoming = true;
     } else if (upcoming === 'false') {
       query.isUpcoming = false;
     }
-    
+
     // Filter by dynamic status
     if (status) {
       switch (status) {
@@ -405,7 +416,7 @@ export const getPublishCourses = async (req, res) => {
             isUpcoming: false,
             enrollmentStart: { $lte: now, $ne: null },
             enrollmentEnd: { $gte: now, $ne: null },
-            courseStart: { $ne: null }
+            courseStart: { $ne: null },
           };
           break;
         case COURSE_STATUS.UPCOMING:
@@ -414,7 +425,7 @@ export const getPublishCourses = async (req, res) => {
             isUpcoming: false,
             enrollmentStart: { $gt: now, $ne: null },
             enrollmentEnd: { $ne: null },
-            courseStart: { $ne: null }
+            courseStart: { $ne: null },
           };
           break;
         case COURSE_STATUS.ENROLLMENT_CLOSED:
@@ -422,35 +433,37 @@ export const getPublishCourses = async (req, res) => {
             ...query,
             isUpcoming: false,
             enrollmentEnd: { $lt: now, $ne: null },
-            courseStart: { $gt: now, $ne: null }
+            courseStart: { $gt: now, $ne: null },
           };
           break;
         case COURSE_STATUS.COURSE_STARTED:
           query = {
             ...query,
             isUpcoming: false,
-            courseStart: { $lte: now, $ne: null }
+            courseStart: { $lte: now, $ne: null },
           };
           break;
         case COURSE_STATUS.COMING_SOON:
           query = {
             ...query,
-            isUpcoming: true
+            isUpcoming: true,
           };
           break;
       }
     }
-    
+
     const publishCourse = await Course.find(query)
       .sort({ createdAt: -1 })
       .populate('category', 'name')
       .populate('teachers', 'name role avatar')
       .select(
-        'title thumbnail price category description duration enrollmentStart enrollmentEnd courseStart averageRating lectures teachers status featured isUpcoming'
+        'title thumbnail price category description duration enrollmentStart enrollmentEnd courseStart averageRating ratingCount currentStatus lectures teachers status featured isComingSoon'
       );
 
     // Format each course with status info
-    const formattedCourses = publishCourse.map(course => formatCourseResponse(course));
+    const formattedCourses = publishCourse.map((course) =>
+      formatCourseResponse(course)
+    );
 
     res.status(200).json({
       success: true,
@@ -466,7 +479,7 @@ export const getFeaturedCourses = async (req, res) => {
   try {
     const featuredCourses = await Course.find({
       featured: true,
-      status: 'published'
+      status: 'published',
     })
       .sort({ createdAt: -1 })
       .populate('category', 'name')
@@ -475,7 +488,9 @@ export const getFeaturedCourses = async (req, res) => {
         'title thumbnail price category description duration enrollmentStart enrollmentEnd courseStart averageRating lectures teachers ratingCount status isUpcoming'
       );
 
-    const formattedCourses = featuredCourses.map(course => formatCourseResponse(course));
+    const formattedCourses = featuredCourses.map((course) =>
+      formatCourseResponse(course)
+    );
 
     res.status(200).json({
       success: true,
@@ -496,16 +511,16 @@ export const getCourseDetails = async (req, res) => {
       .populate('teachers', 'name role bio avatar')
       .populate({
         path: 'reviews',
-        populate: { path: 'user', select: 'name avatar' }
+        populate: { path: 'user', select: 'name avatar' },
       })
       .select(
         'averageRating category courseStart description duration enrollmentEnd enrollmentStart featured features lectures price ratingCount status studentCount teachers thumbnail title isUpcoming'
       );
 
     if (!course) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Course not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
       });
     }
 
@@ -523,33 +538,33 @@ export const getCourseDetails = async (req, res) => {
 export const getCourses = async (req, res) => {
   try {
     const { status, featured, upcoming } = req.query;
-    
+
     let query = {};
-    
+
     // Filter by status
     if (status) {
       query.status = status;
     }
-    
+
     // Filter by featured
     if (featured === 'true') {
       query.featured = true;
     }
-    
+
     // Filter by upcoming
     if (upcoming === 'true') {
       query.isUpcoming = true;
     } else if (upcoming === 'false') {
       query.isUpcoming = false;
     }
-    
+
     const courses = await Course.find(query)
       .populate('teachers', 'name email role')
       .populate('category', 'name')
       .select(
         'title thumbnail price category description features teachers enrollmentStart enrollmentEnd courseStart duration averageRating ratingCount lectures status featured createdAt studentCount isUpcoming'
       );
-    
+
     // Format courses with additional status info
     const modifiedCourses = courses.map((course) => {
       const formattedCourse = formatCourseResponse(course);
@@ -563,7 +578,7 @@ export const getCourses = async (req, res) => {
     res.status(200).json({
       success: true,
       count: modifiedCourses.length,
-      data: modifiedCourses
+      data: modifiedCourses,
     });
   } catch (error) {
     handleError(res, error, 'Failed to fetch courses');
@@ -578,9 +593,9 @@ export const getCourseById = async (req, res) => {
       .populate('category', 'name');
 
     if (!course) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Course not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
       });
     }
 
@@ -592,7 +607,7 @@ export const getCourseById = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: modifiedCourse
+      data: modifiedCourse,
     });
   } catch (error) {
     handleError(res, error, 'Failed to fetch course');
@@ -605,9 +620,9 @@ export const getCourseWithLectures = async (req, res) => {
     const { id } = req.params;
 
     if (!userId) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
       });
     }
 
@@ -618,9 +633,9 @@ export const getCourseWithLectures = async (req, res) => {
     });
 
     if (!enrollment) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         success: false,
-        message: 'You must enroll in this course to access lectures' 
+        message: 'You must enroll in this course to access lectures',
       });
     }
 
@@ -629,17 +644,17 @@ export const getCourseWithLectures = async (req, res) => {
       .populate('teachers', 'name email');
 
     if (!course) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Course not found' 
+        message: 'Course not found',
       });
     }
 
     const formattedCourse = formatCourseResponse(course);
-    
+
     res.status(200).json({
       success: true,
-      data: formattedCourse
+      data: formattedCourse,
     });
   } catch (error) {
     handleError(res, error, 'Failed to fetch course lectures');
@@ -654,20 +669,20 @@ export const updateCourse = async (req, res) => {
     if (req.user.role !== 'admin') {
       const course = await Course.findById(id).select('teachers');
       if (!course) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Course not found' 
+        return res.status(404).json({
+          success: false,
+          message: 'Course not found',
         });
       }
-      
+
       const isTeacherOfCourse = course.teachers.some(
-        tId => tId.toString() === req.user._id.toString()
+        (tId) => tId.toString() === req.user._id.toString()
       );
-      
+
       if (!isTeacherOfCourse) {
-        return res.status(403).json({ 
-          success: false, 
-          message: 'You are not authorized to update this course' 
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to update this course',
         });
       }
     }
@@ -747,18 +762,26 @@ export const updateCourse = async (req, res) => {
     let finalEnrollmentEnd = existingCourse.enrollmentEnd;
     let finalCourseStart = existingCourse.courseStart;
     let finalStatus = status || existingCourse.status;
-    let finalIsUpcoming = isUpcoming !== undefined ? 
-                         (isUpcoming === true || isUpcoming === 'true') : 
-                         existingCourse.isUpcoming;
+    let finalIsUpcoming =
+      isUpcoming !== undefined
+        ? isUpcoming === true || isUpcoming === 'true'
+        : existingCourse.isUpcoming;
 
-    const isUpdatingDates = enrollmentStart !== undefined || 
-                           enrollmentEnd !== undefined || 
-                           courseStart !== undefined;
+    const isUpdatingDates =
+      enrollmentStart !== undefined ||
+      enrollmentEnd !== undefined ||
+      courseStart !== undefined;
 
     if (isUpdatingDates) {
-      finalEnrollmentStart = enrollmentStart ? new Date(enrollmentStart) : existingCourse.enrollmentStart;
-      finalEnrollmentEnd = enrollmentEnd ? new Date(enrollmentEnd) : existingCourse.enrollmentEnd;
-      finalCourseStart = courseStart ? new Date(courseStart) : existingCourse.courseStart;
+      finalEnrollmentStart = enrollmentStart
+        ? new Date(enrollmentStart)
+        : existingCourse.enrollmentStart;
+      finalEnrollmentEnd = enrollmentEnd
+        ? new Date(enrollmentEnd)
+        : existingCourse.enrollmentEnd;
+      finalCourseStart = courseStart
+        ? new Date(courseStart)
+        : existingCourse.courseStart;
 
       // Validate dates if all are provided
       if (finalEnrollmentStart && finalEnrollmentEnd && finalCourseStart) {
@@ -789,7 +812,9 @@ export const updateCourse = async (req, res) => {
     // Handle teachers
     let teachersArray = existingCourse.teachers;
     if (teachers !== undefined) {
-      teachersArray = Array.isArray(teachers) ? teachers : [teachers].filter(Boolean);
+      teachersArray = Array.isArray(teachers)
+        ? teachers
+        : [teachers].filter(Boolean);
       teachersArray = [...new Set(teachersArray)];
 
       if (teachersArray.length > 0) {
@@ -822,7 +847,12 @@ export const updateCourse = async (req, res) => {
     let thumbnailPublicId = existingCourse.thumbnailPublicId;
 
     if (req.file) {
-      const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      const allowedMimeTypes = [
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/webp',
+      ];
       if (!allowedMimeTypes.includes(req.file.mimetype)) {
         return res.status(400).json({
           success: false,
@@ -916,35 +946,35 @@ export const deleteCourseCategory = async (req, res) => {
   try {
     // Only admin can delete categories
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Only admin can delete categories' 
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can delete categories',
       });
     }
 
     const { id } = req.params;
-    
+
     // Check if category is being used by any course
     const coursesUsingCategory = await Course.countDocuments({ category: id });
     if (coursesUsingCategory > 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Cannot delete category that is being used by courses' 
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete category that is being used by courses',
       });
     }
 
     const category = await CourseCategory.findByIdAndDelete(id);
 
     if (!category) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Category not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Category not found',
       });
     }
 
-    res.status(200).json({ 
-      success: true, 
-      message: 'Category deleted successfully' 
+    res.status(200).json({
+      success: true,
+      message: 'Category deleted successfully',
     });
   } catch (error) {
     handleError(res, error, 'Failed to delete category');
@@ -955,30 +985,30 @@ export const deleteCourse = async (req, res) => {
   try {
     // Only admin can delete courses
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Only admin can delete courses' 
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can delete courses',
       });
     }
 
     const course = await Course.findById(req.params.id);
     if (!course) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Course not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
       });
     }
 
     // Check if there are any enrollments
-    const enrollmentsCount = await Enrollment.countDocuments({ 
-      course: course._id, 
-      paymentStatus: 'completed' 
+    const enrollmentsCount = await Enrollment.countDocuments({
+      course: course._id,
+      paymentStatus: 'completed',
     });
-    
+
     if (enrollmentsCount > 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Cannot delete course with active enrollments' 
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete course with active enrollments',
       });
     }
 
@@ -1007,9 +1037,9 @@ export const deleteCourse = async (req, res) => {
     // Delete the course
     await Course.findByIdAndDelete(req.params.id);
 
-    res.status(200).json({ 
-      success: true, 
-      message: 'Course deleted successfully' 
+    res.status(200).json({
+      success: true,
+      message: 'Course deleted successfully',
     });
   } catch (error) {
     handleError(res, error, 'Failed to delete course');
@@ -1025,7 +1055,9 @@ export const getTeacherCourses = async (req, res) => {
       .populate('teachers', 'name email')
       .sort({ createdAt: -1 });
 
-    const formattedCourses = courses.map(course => formatCourseResponse(course));
+    const formattedCourses = courses.map((course) =>
+      formatCourseResponse(course)
+    );
 
     res.status(200).json({
       success: true,
@@ -1045,21 +1077,21 @@ export const getTeacherCourseDetails = async (req, res) => {
       .populate('category', 'name');
 
     if (!course) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Course not found' 
+        message: 'Course not found',
       });
     }
 
     // Check if teacher has access to this course
     const isTeacherOfCourse = course.teachers.some(
-      tId => tId._id.toString() === req.user._id.toString()
+      (tId) => tId._id.toString() === req.user._id.toString()
     );
 
     if (req.user.role !== 'admin' && !isTeacherOfCourse) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         success: false,
-        message: 'You do not have access to this course' 
+        message: 'You do not have access to this course',
       });
     }
 
@@ -1071,7 +1103,7 @@ export const getTeacherCourseDetails = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: modifiedCourse
+      data: modifiedCourse,
     });
   } catch (error) {
     handleError(res, error, 'Failed to fetch course details');
@@ -1082,58 +1114,60 @@ export const getCoursesByStatus = async (req, res) => {
   try {
     const { status } = req.query;
     const now = new Date();
-    
+
     let query = { status: 'published' };
-    
+
     switch (status) {
       case COURSE_STATUS.COMING_SOON:
         query.isUpcoming = true;
         break;
-        
+
       case COURSE_STATUS.ENROLLMENT_OPEN:
         query = {
           ...query,
           isUpcoming: false,
           enrollmentStart: { $lte: now, $ne: null },
           enrollmentEnd: { $gte: now, $ne: null },
-          courseStart: { $ne: null }
+          courseStart: { $ne: null },
         };
         break;
-        
+
       case COURSE_STATUS.UPCOMING:
         query = {
           ...query,
           isUpcoming: false,
           enrollmentStart: { $gt: now, $ne: null },
           enrollmentEnd: { $ne: null },
-          courseStart: { $ne: null }
+          courseStart: { $ne: null },
         };
         break;
-        
+
       case COURSE_STATUS.ENROLLMENT_CLOSED:
         query = {
           ...query,
           isUpcoming: false,
           enrollmentEnd: { $lt: now, $ne: null },
-          courseStart: { $gt: now, $ne: null }
+          courseStart: { $gt: now, $ne: null },
         };
         break;
-        
+
       case COURSE_STATUS.COURSE_STARTED:
         query = {
           ...query,
           isUpcoming: false,
-          courseStart: { $lte: now, $ne: null }
+          courseStart: { $lte: now, $ne: null },
         };
         break;
     }
-    
+
     const courses = await Course.find(query)
       .populate('category', 'name')
       .populate('teachers', 'name role avatar')
       .sort({ createdAt: -1 });
 
-    const formattedCourses = courses.map(course => formatCourseResponse(course));
+    const formattedCourses = courses.map((course) =>
+      formatCourseResponse(course)
+    );
 
     res.status(200).json({
       success: true,
@@ -1225,7 +1259,7 @@ export const createLecture = async (req, res) => {
           fileUrl: uploadResult.secure_url,
           publicId: uploadResult.public_id,
           fileType: resourceFile.mimetype,
-          fileSize: resourceFile.size
+          fileSize: resourceFile.size,
         });
       } catch (uploadError) {
         console.error('Resource upload error:', uploadError);
@@ -1248,8 +1282,10 @@ export const createLecture = async (req, res) => {
       { new: true }
     );
 
-    const populatedLecture = await Lecture.findById(lecture._id)
-      .populate('course', 'title');
+    const populatedLecture = await Lecture.findById(lecture._id).populate(
+      'course',
+      'title'
+    );
 
     res.status(201).json({
       success: true,
@@ -1351,7 +1387,7 @@ export const updateLecture = async (req, res) => {
           fileUrl: uploadResult.secure_url,
           publicId: uploadResult.public_id,
           fileType: resourceFile.mimetype,
-          fileSize: resourceFile.size
+          fileSize: resourceFile.size,
         });
       } catch (err) {
         console.error('Resource upload error:', err);
@@ -1513,52 +1549,52 @@ export const addCouponToCourse = async (req, res) => {
     if (!course) {
       return res.status(404).json({
         success: false,
-        message: 'Course not found'
+        message: 'Course not found',
       });
     }
 
     // Check permission
     if (req.user.role === 'teacher') {
       const isTeacherOfCourse = course.teachers.some(
-        tId => tId.toString() === req.user._id.toString()
+        (tId) => tId.toString() === req.user._id.toString()
       );
       if (!isTeacherOfCourse) {
         return res.status(403).json({
           success: false,
-          message: 'You are not allowed to add coupons to this course'
+          message: 'You are not allowed to add coupons to this course',
         });
       }
     }
 
     // Check if coupon code already exists
-    const existingCoupon = await Coupon.findOne({ 
+    const existingCoupon = await Coupon.findOne({
       code: req.body.code,
-      course: id 
+      course: id,
     });
-    
+
     if (existingCoupon) {
       return res.status(400).json({
         success: false,
-        message: 'Coupon code already exists for this course'
+        message: 'Coupon code already exists for this course',
       });
     }
 
-    const coupon = new Coupon({ 
-      ...req.body, 
+    const coupon = new Coupon({
+      ...req.body,
       course: id,
-      createdAt: new Date()
+      createdAt: new Date(),
     });
-    
+
     await coupon.save();
 
-    await Course.findByIdAndUpdate(id, { 
-      $push: { coupons: coupon._id } 
+    await Course.findByIdAndUpdate(id, {
+      $push: { coupons: coupon._id },
     });
 
     res.status(201).json({
       success: true,
       message: 'Coupon added successfully',
-      data: coupon
+      data: coupon,
     });
   } catch (error) {
     handleError(res, error, 'Failed to add coupon');
@@ -1567,24 +1603,26 @@ export const addCouponToCourse = async (req, res) => {
 
 export const updateCoupon = async (req, res) => {
   try {
-    const coupon = await Coupon.findById(req.params.couponId).populate('course');
+    const coupon = await Coupon.findById(req.params.couponId).populate(
+      'course'
+    );
 
     if (!coupon) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Coupon not found' 
+        message: 'Coupon not found',
       });
     }
 
     // Check permission
     if (req.user.role === 'teacher') {
       const isTeacherOfCourse = coupon.course.teachers.some(
-        tId => tId.toString() === req.user._id.toString()
+        (tId) => tId.toString() === req.user._id.toString()
       );
       if (!isTeacherOfCourse) {
         return res.status(403).json({
           success: false,
-          message: 'You are not allowed to update this coupon'
+          message: 'You are not allowed to update this coupon',
         });
       }
     }
@@ -1594,13 +1632,13 @@ export const updateCoupon = async (req, res) => {
       const existingCoupon = await Coupon.findOne({
         code: req.body.code,
         course: coupon.course._id,
-        _id: { $ne: coupon._id }
+        _id: { $ne: coupon._id },
       });
-      
+
       if (existingCoupon) {
         return res.status(400).json({
           success: false,
-          message: 'Coupon code already exists for this course'
+          message: 'Coupon code already exists for this course',
         });
       }
     }
@@ -1614,7 +1652,7 @@ export const updateCoupon = async (req, res) => {
     res.json({
       success: true,
       message: 'Coupon updated successfully',
-      data: updatedCoupon
+      data: updatedCoupon,
     });
   } catch (error) {
     handleError(res, error, 'Failed to update coupon');
@@ -1623,24 +1661,26 @@ export const updateCoupon = async (req, res) => {
 
 export const deleteCoupon = async (req, res) => {
   try {
-    const coupon = await Coupon.findById(req.params.couponId).populate('course');
+    const coupon = await Coupon.findById(req.params.couponId).populate(
+      'course'
+    );
 
     if (!coupon) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Coupon not found' 
+        message: 'Coupon not found',
       });
     }
 
     // Check permission
     if (req.user.role === 'teacher') {
       const isTeacherOfCourse = coupon.course.teachers.some(
-        tId => tId.toString() === req.user._id.toString()
+        (tId) => tId.toString() === req.user._id.toString()
       );
       if (!isTeacherOfCourse) {
         return res.status(403).json({
           success: false,
-          message: 'You are not allowed to delete this coupon'
+          message: 'You are not allowed to delete this coupon',
         });
       }
     }
@@ -1653,9 +1693,9 @@ export const deleteCoupon = async (req, res) => {
     // Delete coupon
     await Coupon.findByIdAndDelete(req.params.couponId);
 
-    res.json({ 
+    res.json({
       success: true,
-      message: 'Coupon deleted successfully' 
+      message: 'Coupon deleted successfully',
     });
   } catch (error) {
     handleError(res, error, 'Failed to delete coupon');
