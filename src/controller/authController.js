@@ -296,39 +296,63 @@ export const updateUser = async (req, res) => {
 
     const user = await User.findById(id);
 
-    if (!user)
+    if (!user) {
       return res
-        .status(400)
-        .json({ success: false, message: 'Invalid or expired reset token' });
+        .status(404)
+        .json({ success: false, message: 'User not found' });
+    }
 
-    user.name = name;
-    user.address = address;
+    user.name = name || user.name;
+    user.address = address || user.address;
 
     if (req.file) {
       if (user.avatarPublicId) {
         await cloudinary.uploader.destroy(user.avatarPublicId);
       }
 
-      const result = await cloudinary.uploader.upload_stream(
+      const stream = cloudinary.uploader.upload_stream(
         { folder: 'user' },
         async (error, result) => {
-          if (error) throw error;
+          if (error) {
+            return res
+              .status(500)
+              .json({ success: false, message: error.message });
+          }
+
           user.avatar = result.secure_url;
           user.avatarPublicId = result.public_id;
           await user.save();
-          res.json({ success: true, message: 'User Updated Successfully' });
+
+          const updatedUser = await User.findById(id).select(
+            'name email phone avatar avatarPublicId address role enrolledCourses isBanned verified createdAt'
+          );
+
+          return res.json({
+            success: true,
+            message: 'User Updated Successfully',
+            user: updatedUser,
+          });
         }
       );
 
-      result.end(req.file.buffer);
+      stream.end(req.file.buffer);
       return;
     }
 
     await user.save();
-    res.json({ success: true, message: 'User Updated Successfully' });
+
+    const updatedUser = await User.findById(id).select(
+      'name email phone avatar avatarPublicId address role enrolledCourses isBanned verified createdAt'
+    );
+
+    res.json({
+      success: true,
+      message: 'User Updated Successfully',
+      user: updatedUser,
+    });
   } catch (error) {
     console.error('Cloudinary Upload Error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -420,15 +444,16 @@ export const getUserDataById = async (req, res) => {
 
   try {
     const user = await User.findById(id).select(
-      'name email phone avatar avatarPublicId address role enrolledCourses isBanned verified'
+      'name email phone avatar avatarPublicId address role enrolledCourses isBanned verified createdAt'
     );
 
-    if (!user)
+    if (!user) {
       return res
         .status(404)
         .json({ success: false, message: 'User not found' });
+    }
 
-    res.status(200).json({ success: true, user: user });
+    res.status(200).json({ success: true, user });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

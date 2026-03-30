@@ -40,6 +40,6 @@ authRouter.post('/logout', logOut);
 // for log out
 authRouter.get('/teachers', getTeacherAdmin);
 authRouter.get('/users', getUserCount);
-authRouter.get('/:id', getUserDataById);
+authRouter.get('/:id', protect, getUserDataById);
 
 export default authRouter;
