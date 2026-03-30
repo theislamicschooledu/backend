@@ -22,8 +22,9 @@ export const signUp = async (req, res) => {
     }
 
     const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
-    if (existingUser)
+    if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const verificationToken = Math.floor(
@@ -36,37 +37,31 @@ export const signUp = async (req, res) => {
       phone,
       password: hashedPassword,
       otp: verificationToken,
-      verificationTokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      verificationTokenExpiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
     });
+
+    await sendEmail(
+      email,
+      'Your verification code for sign in',
+      getVerificationEmailHtml(verificationToken, name)
+    );
 
     generateTokenAndSetCookie(res, user._id);
 
-    try {
-      await sendEmail(
-        email,
-        'Your verification code for sign in',
-        getVerificationEmailHtml(verificationToken, name)
-      );
-    } catch (emailError) {
-      console.log("Email error:", emailError.message);
-    }
-
     res.status(201).json({
       success: true,
-      message: 'User created successfully',
+      message: 'User created successfully. Verification email sent.',
       user: {
         ...user._doc,
         password: undefined,
         otp: undefined,
       },
     });
-
   } catch (error) {
-    console.log("Signup error:", error);
+    console.log('Signup error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
 
 export const logIn = async (req, res) => {
   try {
@@ -223,6 +218,13 @@ export const forgotPassword = async (req, res) => {
   const { email } = req.body;
 
   try {
+    if (!process.env.CLIENT_URL) {
+      return res.status(500).json({
+        success: false,
+        message: 'CLIENT_URL is not configured',
+      });
+    }
+
     const user = await User.findOne({ email });
     if (!user) {
       return res
@@ -241,6 +243,7 @@ export const forgotPassword = async (req, res) => {
     await user.save();
 
     const resetLink = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
+
     await sendEmail(
       email,
       'Password Reset Link',
@@ -251,8 +254,8 @@ export const forgotPassword = async (req, res) => {
       .status(200)
       .json({ success: true, message: 'Reset link sent to your email' });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: 'Server Error' });
+    console.error('Forgot password error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -347,11 +350,11 @@ export const checkAuth = async (req, res) => {
 };
 
 export const logOut = async (req, res) => {
-  res.clearCookie("token", {
+  res.clearCookie('token', {
     httpOnly: true,
     secure: true,
-    sameSite: "none",
-    path: "/",
+    sameSite: 'none',
+    path: '/',
   });
   res.status(200).json({ success: true, message: 'Logged out successfully' });
 };
