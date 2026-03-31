@@ -11,6 +11,7 @@ import {
   getQuestionById,
   getQuestionByIdForTeacher,
   getQuestionCategory,
+  incrementQuestionView,
   updateAnswer,
   updateQuestion,
 } from '../controller/questionController.js';
@@ -27,6 +28,7 @@ questionRouter.post('/', protect, askQuestion);
 questionRouter.put('/:id', protect, updateQuestion);
 questionRouter.delete('/:id', protect, deleteQuestion);
 
+questionRouter.patch('/publishQuestion/:id/view', incrementQuestionView);
 questionRouter.post('/:id/answers', protect, teacherOrAdmin, answerQuestion);
 questionRouter.put('/:id/answers/:answerId', protect, updateAnswer);
 questionRouter.delete(

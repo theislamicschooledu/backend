@@ -25,6 +25,10 @@ const blogSchema = new mongoose.Schema(
       enum: ['pending', 'published', 'rejected'],
       default: 'pending',
     },
+    views: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true }
 );

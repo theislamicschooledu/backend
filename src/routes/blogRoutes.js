@@ -11,6 +11,7 @@ import {
   getBlogByIdForAdminOrCreator,
   getBlogsForCreator,
   getPublishedBlogDetails,
+  incrementBlogView,
 } from '../controller/blogController.js';
 import { upload } from '../middlewares/upload.js';
 
@@ -28,6 +29,7 @@ blogRouter.get('/publishedBlog', getPublishedBlogs);
 blogRouter.get('/publishedBlog/:id', getPublishedBlogDetails);
 blogRouter.get('/featuredBlog', getFeaturedBlogs);
 blogRouter.get('/my-blogs', protect, getBlogsForCreator);
+blogRouter.patch('/publishedBlog/:id/view', incrementBlogView);
 
 // Get by ID
 blogRouter.get('/:id', protect, getBlogByIdForAdminOrCreator);

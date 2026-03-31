@@ -96,14 +96,19 @@ export const getBlogCategory = async (req, res) => {
 
 export const getPublishedBlogs = async (req, res) => {
   try {
+    const { sort } = req.query;
+
+    const sortOption =
+      sort === 'most-read' ? { views: -1, createdAt: -1 } : { createdAt: -1 };
+
     const publishedBlogs = await BlogPost.find({
       status: 'published',
     })
-      .sort({ createdAt: -1 })
+      .sort(sortOption)
       .populate('author', 'name email')
       .populate('category', 'name');
 
-    if (!publishedBlogs) {
+    if (!publishedBlogs || publishedBlogs.length === 0) {
       return res.status(404).json({ success: false, message: 'No blog found' });
     }
 
@@ -122,16 +127,15 @@ export const getPublishedBlogs = async (req, res) => {
 
 export const getPublishedBlogDetails = async (req, res) => {
   try {
-    const blog = await BlogPost.findById(req.params.id)
-      .populate('author', 'name email')
+    const blog = await BlogPost.findOne({
+      _id: req.params.id,
+      status: 'published',
+    })
+      .populate('author', 'name email role')
       .populate('category', 'name');
 
     if (!blog) {
       return res.status(404).json({ success: false, message: 'No blog found' });
-    }
-
-    if (blog.status !== "published") {
-      return res.status(401).json({ success: false, message: 'Blog is not published yet.' });
     }
 
     res.status(200).json({
@@ -139,10 +143,10 @@ export const getPublishedBlogDetails = async (req, res) => {
       blogs: blog,
     });
   } catch (error) {
-    console.error('Error fetching published blogs:', error);
+    console.error('Error fetching published blog details:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch published blogs',
+      message: 'Failed to fetch published blog details',
     });
   }
 };
@@ -301,5 +305,40 @@ export const deleteBlog = async (req, res) => {
     }
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
+  }
+};
+
+export const incrementBlogView = async (req, res) => {
+  try {
+    const blog = await BlogPost.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: 'published',
+      },
+      {
+        $inc: { views: 1 },
+      },
+      {
+        new: true,
+      }
+    );
+
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        message: 'No blog found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      views: blog.views,
+    });
+  } catch (error) {
+    console.error('Error incrementing blog view:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to increment blog view',
+    });
   }
 };

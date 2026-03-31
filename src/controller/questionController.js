@@ -83,7 +83,10 @@ export const getQuestionById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    let question = await Question.findById(id)
+    let question = await Question.findOne({
+      _id: id,
+      status: 'published',
+    })
       .populate('askedBy', 'name role')
       .populate('answers.answeredBy', 'name role')
       .populate('category', 'name')
@@ -130,9 +133,7 @@ export const getQuestionByIdForTeacher = async (req, res) => {
         .json({ success: false, message: 'Question not found' });
     }
 
-    if (
-      req.user.role !== 'teacher'
-    ) {
+    if (req.user.role !== 'teacher') {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -163,8 +164,13 @@ export const getQuestionCategory = async (req, res) => {
 
 export const getPublishedQuestions = async (req, res) => {
   try {
+    const { sort } = req.query;
+
+    const sortOption =
+      sort === 'most-read' ? { views: -1, createdAt: -1 } : { createdAt: -1 };
+
     let publishedQuestions = await Question.find({ status: 'published' })
-      .sort({ createdAt: -1 })
+      .sort(sortOption)
       .populate('askedBy', 'name email')
       .populate('answers.answeredBy', 'name role')
       .populate('category', 'name')
@@ -209,6 +215,7 @@ export const getFeaturedQuestions = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate('askedBy', 'name email')
       .populate('answers.answeredBy', 'name role')
+      .populate('category', 'name')
       .lean();
 
     if (!featuredQuestions || featuredQuestions.length === 0) {
@@ -394,5 +401,40 @@ export const deleteAnswer = async (req, res) => {
       .json({ success: true, message: 'Answer deleted successfully' });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
+  }
+};
+
+export const incrementQuestionView = async (req, res) => {
+  try {
+    const question = await Question.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: 'published',
+      },
+      {
+        $inc: { views: 1 },
+      },
+      {
+        new: true,
+      }
+    );
+
+    if (!question) {
+      return res.status(404).json({
+        success: false,
+        message: 'No question found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      views: question.views,
+    });
+  } catch (error) {
+    console.error('Error incrementing question view:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to increment question view',
+    });
   }
 };
