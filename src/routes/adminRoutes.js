@@ -1,5 +1,6 @@
 import express from 'express';
 import { adminOnly, protect } from '../middlewares/auth.js';
+import { upload } from '../middlewares/upload.js';
 import {
   addBlogCategory,
   addQuestionCategory,
@@ -21,6 +22,7 @@ import {
   getQuestionByIdAdmin,
   getUserById,
   unBanUser,
+  updateUserByAdmin,
 } from '../controller/adminController.js';
 const adminRouter = express.Router();
 
@@ -28,6 +30,13 @@ const adminRouter = express.Router();
 
 adminRouter.get('/users', protect, adminOnly, getAllUser);
 adminRouter.get('/users/:id', protect, adminOnly, getUserById);
+adminRouter.put(
+  '/users/:id',
+  protect,
+  adminOnly,
+  upload.single('user'),
+  updateUserByAdmin
+);
 adminRouter.put('/:id/ban', protect, adminOnly, banUser);
 adminRouter.put('/:id/unBan', protect, adminOnly, unBanUser);
 adminRouter.put('/change-role', protect, adminOnly, changeRole);

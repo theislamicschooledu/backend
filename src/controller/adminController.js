@@ -4,6 +4,7 @@ import Course from '../models/Course.js';
 import Question from '../models/Question.js';
 import QuestionCategory from '../models/QuestionCategory.js';
 import User from '../models/User.js';
+import cloudinary from '../utils/cloudinary.js';
 
 // User Controller
 export const getAllUser = async (req, res) => {
@@ -98,6 +99,72 @@ export const changeRole = async (req, res) => {
     res.json({ success: true, message: `${user.name} is make as ${role}` });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const updateUserByAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, address } = req.body;
+
+    const user = await User.findById(id);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'User not found' });
+    }
+
+    user.name = name || user.name;
+    user.address = address || user.address;
+
+    if (req.file) {
+      if (user.avatarPublicId) {
+        await cloudinary.uploader.destroy(user.avatarPublicId);
+      }
+
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'user' },
+        async (error, result) => {
+          if (error) {
+            return res
+              .status(500)
+              .json({ success: false, message: error.message });
+          }
+
+          user.avatar = result.secure_url;
+          user.avatarPublicId = result.public_id;
+          await user.save();
+
+          const updatedUser = await User.findById(id).select('-password -otp');
+
+          return res.status(200).json({
+            success: true,
+            message: 'User updated successfully',
+            user: updatedUser,
+          });
+        }
+      );
+
+      stream.end(req.file.buffer);
+      return;
+    }
+
+    await user.save();
+
+    const updatedUser = await User.findById(id).select('-password -otp');
+
+    return res.status(200).json({
+      success: true,
+      message: 'User updated successfully',
+      user: updatedUser,
+    });
+  } catch (error) {
+    console.error('Admin update user error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update user',
+    });
   }
 };
 
@@ -306,7 +373,7 @@ export const deleteQuestionCategory = async (req, res) => {
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
-}
+};
 
 export const approveAnswer = async (req, res) => {
   try {
@@ -458,7 +525,7 @@ export const changeCourseStatus = async (req, res) => {
       message: err.message || 'Internal server error',
     });
   }
-}
+};
 
 export const changeCourseFeatured = async (req, res) => {
   try {
